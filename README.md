@@ -5,6 +5,8 @@ also the code is viewable via the code viewer in the website or application.
 
 # IMPORTANT DETAILS FOR SETUP
 
+- Using hard coded tokens are bad practice! This isn't production ready, and may contain security issues, the rest of setup details at in projects.
+
 - The uncompressed version in the projects branch is not production ready IT IS A WORK IN PROGRESS it doesn't have data lost protection.
   
 - This code is skeleton-only. The data.json, context.json, and filter.json files must be populated with your own intents, patterns, responses, and filter words for the chatbot and moderation to function. The default files contain starter data for demonstration and will NOT produce meaningful conversation without training or customization.

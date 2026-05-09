@@ -5,9 +5,9 @@ also the code is viewable via the code viewer in the website or application.
 
 
 # project information 
-All project details are inside the documents folder.
+All project details are inside the documents branch. (On top on where it says 'main' press or click on it.)
 
-All project files are inside the projects folder
+All project files are inside the projects folder. (On top on where it says 'main' press or click on it.)
 
 # Important project details
 

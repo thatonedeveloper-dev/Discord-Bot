@@ -5,7 +5,7 @@ also the code is viewable via the code viewer in the website or application.
 
 
 # project information 
-All project details are inside the documents branch. (On top on where it says 'main' press or click on it.)
+All project details are inside the documents branch. (The newest Doc-5.8 contains database information and more details about the chatbot, the rest can be explained by AI. On top on where it says 'main' press or click on it.)
 
 All project files are inside the projects folder. (On top on where it says 'main' press or click on it.)
 

@@ -1,0 +1,1025 @@
+import asyncio,hashlib,json,logging,math,os,random,re,select,socket,sys,time,traceback
+from collections import deque
+import discord
+from discord import app_commands
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ═══ CONFIG ═══
+Tk="YOUR_BOT_TOKEN_HERE";Oi=123456789012345678;P="/storage/emulated/0/SLM_test"
+If=os.path.join(P,"data.json");Cf=os.path.join(P,"context.json");Ff=os.path.join(P,"filter.json")
+Gf=os.path.join(P,"grudges.json");Lf=os.path.join(P,"levels.json");Ld=os.path.join(P,"logs")
+Cc="chat";Cd="Talk to the pattern‑matching chatbot (public)"
+Pc="profile";Pd="View a user's profile information"
+Lc="lyrics";Ld1="Find a song by lyrics, title, or artist"
+Bc="badapple";Bd="Rule 86: Bad Apple exists on everything."
+Sc="support";Sd="Links and information for this bot"
+Tc="settings";Td="Toggle grudge DMs or other bot settings"
+Rc="rank";Rd="Check your level and XP (or someone else's)"
+Cb="leaderboard";Cbd="Hall of Shame – see the worst grudge scores"
+St="🛟 Support & Credits";Sd2="Here's where you can find help, report issues, or just say hi."
+Scp=0x5865F2;Sf="Thank you for using the bot!";Stn=""
+Sflds=[("📢 Official Server","[Join the Discord](https://discord.gg/yourserver)",0),("🐞 Report a Bug","DM <@YOUR_DISCORD_ID> or use `/chat` fallback.",0),("📖 Credits","Built with ❤️ using **discord.py** and **scikit‑learn**. Touhou © ZUN.",0)]
+Bw=["nsfw_word1","nsfw_word2"];Mc=["https://cataas.com/cat/gif","https://cataas.com/cat/says/repairing"]
+Bag="https://media1.tenor.com/m/21209263/tenor.gif";Alt=3;Alw=10.0;Cth=0.35;Fth=0.65;Mr=10;Id=5;Md=10
+Gdi=21600;Gda=1;Grc=0.02
+Gcn=["general","general-chat","general_chat","main-chat","main_chat","chat","lounge","off-topic","random","bar","pub","tavern","commons","hall","lobby","general-channel","generalchannel"]
+Le=1;Xpmin=15;Xpmax=25;Xpcd=60;Luc=None;Lpp=10
+def _lx(xp):return int(math.sqrt(xp/100))
+def _xn(l):return (l+1)**2*100
+Si="https://discord.com/oauth2/authorize?client_id=your_client_id&permissions=8&scope=bot+applications.commands"
+Sf2="The bot runs on a phone. If it goes offline, blame the owner's battery."
+_og=socket.getaddrinfo
+def _pa(h,p,f=0,t=0,pr=0,fl=0):
+ try:return _og(h,p,f,t,pr,fl)
+ except socket.gaierror:time.sleep(2);return _og(h,p,f,t,pr,fl)
+socket.getaddrinfo=_pa
+logging.basicConfig(level=logging.INFO,format='[%(asctime)s] %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+logger=logging.getLogger(__name__)
+for m in["aiohttp","discord.http","discord.gateway"]:logging.getLogger(m).setLevel(logging.WARNING)
+Se={"minor":{"title":"ℹ️ Bot Notice","color":0x57F287},"warning":{"title":"⚠️ Bot Warning","color":0xFEE75C},"error":{"title":"🛑 Bot Error","color":0xFF4500},"critical":{"title":"🚨 Critical Error","color":0xED4245}}
+
+# ═══ FILTER ═══
+fp,ft,fv,fvs,fld=[],[],None,None,False
+def _lf():
+ global fp,ft,fv,fvs,fld
+ if not os.path.exists(Ff):
+  os.makedirs(P,exist_ok=1)
+  with open(Ff,"w",encoding="utf-8")as f:json.dump({"intents":[{"tag":"fuck","patterns":["fuck","f*ck","f**k","f***","fck","fuuck","fuuuck","fuk","fukk","f4ck","f0ck","f u c k","f.ck","f*ck","eff you see kay","fack","phuck","phuk","f***ing","fk","fkn","fckn","fkin","f***in","f-ing","fucking","f u c k i n g"]},{"tag":"shit","patterns":["shit","sh*t","sh1t","sh!t","sht","shitt","shiiiit","shite","shyte","s h i t","sh.it","$hit","$h*t","5hit","sh1t","s,h,i,t","s-h-i-t","s.h.i.t"]},{"tag":"ass","patterns":["ass","a$$","a**","azz","a s s","arse","@ss","a55","4ss"]},{"tag":"bitch","patterns":["bitch","b*tch","b!tch","b1tch","biatch","beyotch","b i t c h","b17ch","b1tch","beotch"]},{"tag":"nigger","patterns":["nigger","n*gger","n!gger","n1gger","nigg3r","n1gg3r","nigga","n*gga","n!gga","n1gga","nigg@","n i g g e r","n i g g a","nibba","n1bb4","nibb@"]},{"tag":"retard","patterns":["retard","r*tard","r3tard","ret4rd","r3t4rd","ret@rd","r e t a r d","retrd","rtard","ritard"]}]},f,indent=2,ensure_ascii=0)
+ try:data=json.load(open(Ff,"r",encoding="utf-8"))
+ except:logger.warning("filter.json corrupted – using exact‑word fallback");fld=1;return
+ fp.clear();ft.clear()
+ for i in data.get("intents",[]):
+  for p in i.get("patterns",[]):fp.append(p.lower().strip());ft.append(i["tag"])
+ if not fp:logger.warning("Empty filter patterns – using exact‑word fallback");fld=1;return
+ try:
+  fv=TfidfVectorizer(analyzer='char_wb',ngram_range=(3,6))
+  fvs=fv.fit_transform(fp)
+  fld=1;logger.info("Filter model trained with %d patterns",len(fp))
+ except Exception as e:logger.error("Filter training failed: %s",e);fld=1
+_fbp=[re.compile(r'\b'+re.escape(w)+r'\b',re.I)for w in Bw]
+_fw={"assistance","class","pass","grass","mass","assist","trigger","triggers","trig","try","trick","track","shift","sh*t","shin","shy","sheet","shoot"}
+fl=asyncio.Lock()
+def _ft(tx):
+ if not fld:_lf()
+ if fv is None or fvs is None or not fp:
+  for p in _fbp:tx=p.sub("[Filtered]",tx)
+  return tx
+ lns=tx.splitlines(keepends=1);flines=[];mpl=max(len(p)for p in fp)
+ for ln in lns:
+  lt=ln.rstrip('\n\r')if ln.endswith(('\n','\r'))else ln;wds=lt.split();fwds=[]
+  for w in wds:
+   cl=re.sub(r'[^\w]|_','',w.lower().strip())
+   if len(cl)<=1 or cl in _fw:fwds.append(w);continue
+   try:
+    vec=fv.transform([cl]);sims=cosine_similarity(vec,fvs)
+    if sims.size>0 and sims.shape[1]>0 and float(sims[0][sims.argmax()])>=Fth and len(cl)<=mpl:fwds.append("[Filtered]");continue
+   except:pass
+   fwds.append(w)
+  rb=" ".join(fwds)
+  if ln.endswith('\n'):rb+='\n'
+  elif ln.endswith('\r'):rb+='\r'
+  flines.append(rb)
+ return"".join(flines)
+fe=deque(maxlen=200);al=1;ce=1;re=1;dr="maintenance";pl=0;pp="";clg=deque(maxlen=5000)
+async def _aa(uid):
+ global ce,dr
+ if not al:return
+ n=time.time()
+ async with fl:
+  while fe and fe[0][0]<n-Alw:fe.popleft()
+  us={u for _,u in fe}
+  if len(us)>=Alt:ce=0;dr="Auto‑lockdown: multiple filtered messages";logger.warning("Auto‑lockdown: %d users in %ds",len(us),Alw);await _ed(f"Chat disabled by auto‑lockdown ({len(us)} users)",level="warning")
+
+# ═══ MATH ═══
+_smn={"abs":abs,"round":round,"min":min,"max":max,"sqrt":math.sqrt,"sin":math.sin,"cos":math.cos,"tan":math.tan,"asin":math.asin,"acos":math.acos,"atan":math.atan,"atan2":math.atan2,"log":math.log,"log10":math.log10,"log2":math.log2,"exp":math.exp,"pow":math.pow,"pi":math.pi,"e":math.e,"tau":math.tau,"inf":math.inf,"nan":math.nan,"ceil":math.ceil,"floor":math.floor,"degrees":math.degrees,"radians":math.radians,"gcd":math.gcd,"lcm":math.lcm}
+_ebp=[re.compile(p,re.I)for p in[r'__',r'\.\s*__',r'\(\)',r'"',r"'",r'\bclass\b',r'\bbase\b',r'\bsubclass\b',r'\bmro\b',r'\bimport\b',r'\bexec\b',r'\bopen\b',r'\bfile\b',r'\bglobals\b',r'\blocals\b',r'\bgetattr\b',r'\bsetattr\b',r'\bdelattr\b',r'\bbuiltins\b',r'\bfrozen\b',r'\bos\.',r'\bsystem\b',r'\bpopen\b',r'\bf_back\b',r'\bf_code\b',r'\btb_frame\b',r'\btraceback\b',r'\baudit\b',r'\bhook\b',r'\bcodec\b',r'\bencode\b',r'\bdecode\b',r'\brunpy\b',r'\brunp\b',r'\brun\s*\_',r'\bimportlib\b']]
+_vmr=re.compile(r'^[a-zA-Z0-9\s+*/^%!().,\-]+$')
+_wn={"zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,"sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19,"twenty":20,"thirty":30,"forty":40,"fifty":50,"sixty":60,"seventy":70,"eighty":80,"ninety":90,"hundred":100,"thousand":1000,"million":1000000,"billion":1000000000}
+_wo={"plus":r'\bplus\b',"added to":r'\badded\s+to\b',"add":r'\badd\b',"minus":r'\bminus\b',"subtract":r'\bsubtract\b',"subtracted from":r'\bsubtracted\s+from\b',"less":r'\bless\b',"take away":r'\btake\s+away\b',"times":r'\btimes\b',"multiplied by":r'\bmultiplied\s+by\b',"multiply":r'\bmultiply\b',"divided by":r'\bdivided\s+by\b',"divide":r'\bdivide\b',"over":r'\bover\b',"to the power of":r'\bto\s+the\s+power\s+of\b',"raised to":r'\braised\s+to\b',"modulo":r'\bmodulo\b',"mod":r'\bmod\b',"remainder of":r'\brest\s+of\b',"squared":r'\bsquared\b',"cubed":r'\bcubed\b',"square root of":r'\bsquare\s+root\s+of\b',"the square root of":r'\bthe\s+square\s+root\s+of\b',"cube root of":r'\bcube\s+root\s+of\b'}
+_osy={"plus":"+","added to":"+","add":"+","minus":"-","subtract":"-","subtracted from":"-","less":"-","take away":"-","times":"*","multiplied by":"*","multiply":"*","divided by":"/","divide":"/","over":"/","to the power of":"**","raised to":"**","modulo":"%","mod":"%","remainder of":"%","squared":"**2","cubed":"**3","square root of":"sqrt(","the square root of":"sqrt(","cube root of":"cbrt("}
+_wc={"pi":"pi","e":"e","tau":"tau","infinity":"inf","inf":"inf"}
+def _w2n(tx):
+ tx=tx.lower().strip();tx=re.sub(r'\ba\b','',tx).replace(" and "," ")
+ tx=re.sub(r'[!?.,;:]+$','',tx);wds=tx.split()
+ if not wds:return tx
+ total=current=0
+ for w in wds:
+  if w in _wn:
+   v=_wn[w]
+   if v>=1000:
+    if current==0:current=1
+    current*=v;total+=current;current=0
+   elif v>=100:
+    if current==0:current=1
+    current*=v
+   else:current+=v
+  else:return tx
+ total+=current
+ return str(total)if total!=0 else tx
+def _se(expr):
+ for p in _ebp:
+  if p.search(expr):return None
+ if not _vmr.match(expr)or len(expr)>200:return None
+ return expr
+_nwr=re.compile(r'(?:(?:'+'|'.join(re.escape(w)for w in _wn)+r')\s*)+')
+def _rwo(expr):
+ try:
+  expr=expr.lower().strip()
+  for w,c in sorted(_wc.items(),key=lambda x:-len(x[0])):expr=expr.replace(w,c)
+  for ph,pat in sorted(_wo.items(),key=lambda x:-len(x[0])):
+   sym=_osy.get(ph,"")
+   if not sym:continue
+   if sym in("**2","**3"):expr=re.sub(r'(\d+|\))\s*'+pat,r'\1'+sym,expr)
+   elif sym in("sqrt(","cbrt("):expr=re.sub(pat+r'\s*(\d+(?:\.\d+)?|\([^)]+\))',lambda m,s=sym:s+m.group(1)+")",expr)
+   else:expr=re.sub(pat,f" {sym} ",expr)
+  expr=_nwr.sub(lambda m:_w2n(m.group(0)),expr)
+  expr=re.sub(r'\s+',' ',expr).strip()
+  expr=re.sub(r'^(what is|whats|what\'s|calculate|solve|compute|evaluate|find|tell me|how much is)\s*','',expr,flags=re.I)
+  expr=expr.rstrip('?=').strip()
+  return expr
+ except:return expr
+def _ime(tx):
+ if not tx:return 0
+ s=tx.strip().lower()
+ hs=bool(re.search(r'[+\-*/^%!()]|//|\*\*',s))
+ hw=any(re.search(p,s)for p in _wo.values())
+ hd=bool(re.search(r'[0-9]',s))
+ hwn=any(w in s.split()for w in _wn)
+ hc=any(c in s.split()for c in _wc)
+ hn=hd or hwn or hc
+ if bool(re.match(r'^[0-9]*\.?[0-9]+$',s))and not(hs or hw):return 0
+ return hn and(hs or hw)
+def _ss(expr):
+ expr=_rwo(expr).strip().replace("^","**")
+ expr=re.sub(r'cbrt\(([^)]+)\)',r'(\1)**(1/3)',expr)
+ expr=_se(expr)
+ if expr is None:return None
+ try:
+  sd={"__builtins__":{}}
+  sd.update(_smn)
+  r=eval(expr,sd)
+  if isinstance(r,(int,float)):
+   if isinstance(r,float)and r==int(r):r=int(r)
+   if isinstance(r,float):r=round(r,10)
+   return str(r)
+  return str(r)
+ except:return None
+def _split(tx):
+ pts,cur,dp=[],[],0
+ for ch in tx:
+  if ch in'([{':dp+=1
+  elif ch in')]}':dp=max(0,dp-1)
+  elif ch in',;'and dp==0:pts.append(''.join(cur).strip());cur=[];continue
+  cur.append(ch)
+ if cur:pts.append(''.join(cur).strip())
+ return[p for p in pts if p]
+def _sm(m):
+ pts=_split(m)
+ if not pts:return None
+ res=[]
+ for p in pts:
+  if not _ime(p):return None
+  a=_ss(p)
+  if a is None:return None
+  res.append((p,a))
+ return res
+_sc={'pi','e','tau','inf','nan'}
+def _ic(expr):
+ cl=re.sub(r'[0-9+\-*/^%!()\[\]\s.]','',expr.lower().strip())
+ return bool(set(re.findall(r'[a-zA-Z_]+',cl))-_sc)
+_SST="The answer to {expr} is {ans}.|{expr} = {ans}.|Easy! {expr} equals {ans}.|Calculating... {expr} results in {ans}.|If you do {expr}, you get {ans}.|It's simple: {expr} → {ans}.|I computed {expr} and got {ans}.|Result: {expr} = {ans}.|{expr} gives us {ans}.|No sweat! {expr} is {ans}.|After doing the math, {expr} = {ans}.|For {expr}, the answer is {ans}.|That's straightforward: {expr} = {ans}.|The result of {expr} is {ans}.|Let's see... {expr} = {ans}.|I solved {expr} and the answer is {ans}.|Quick math: {expr} = {ans}.|Here you go: {expr} = {ans}.|The magic number from {expr} is {ans}.|Done! {expr} equals {ans}."
+_SMH="Here are the answers:|Let's solve these:|You asked for these:|Calculating all:|Here we go:|Multiple solutions:|Check it out:|All done:|Here's what I got:|Results:|Solving the set:|Behold:|Ta-da:|Simple batch:|All calculations:|I solved them:|Your results:|Here you are:|Answers below:|Quick batch:|Maths resolved:"
+_SMIF="{expr} = {ans}|{expr} → {ans}|{expr} gives {ans}|{expr} equals {ans}|for {expr} we get {ans}|{expr} results in {ans}|{expr} -> {ans}|{expr} yields {ans}|{expr} produces {ans}|{expr} is {ans}"
+_SMJ=", |; | and | then | also | plus | along with | together with "
+_CST="Evaluating {expr}, the result is {ans}.|When we compute {expr}, we obtain {ans}.|The value of {expr} is {ans}.|After careful calculation, {expr} = {ans}.|I determined that {expr} equals {ans}.|The expression {expr} evaluates to {ans}.|We find that {expr} → {ans}.|Solving {expr} gives us {ans}.|I've calculated {expr} and the answer is {ans}.|Upon evaluating {expr}, we get {ans}.|The result of the expression {expr} is {ans}.|For {expr}, the computed answer is {ans}.|It turns out {expr} = {ans}.|That expression simplifies to {ans}.|The computation yields {ans} for {expr}.|I resolved {expr} and got {ans}.|With some math, {expr} = {ans}.|The evaluation of {expr} comes out to {ans}.|Working out {expr}, we arrive at {ans}.|Here's the result: {expr} = {ans}."
+_CMH="Let me work through these:|Here are the results:|Complex calculations completed:|Solving the following:|Here's what I found:|Evaluating each:|Multi-step results:|I computed the expressions and got:|For these problems, here are the answers:|Expressions evaluated:|Maths solved:|Here you go — advanced edition:|After some heavy lifting:|Results of the complex batch:|All solved:|The evaluations are in:|Look at these results:|Your advanced math solutions:|Carefully computed:|Done with the difficult ones:|Here's the breakdown:"
+_CMIF="evaluating {expr} gives {ans}|the value of {expr} is {ans}|{expr} simplifies to {ans}|{expr} evaluates to {ans}|{expr} results in {ans}|computing {expr} yields {ans}|{expr} -> {ans}|for {expr}, the answer is {ans}|{expr} equals {ans} after evaluation|working on {expr} leads to {ans}"
+_CMJ=", |; | and | then | also | plus | along with | together with | further, | moreover, | additionally, "
+_MMH="Here are the answers to your mixed set:|Some were simple, some needed more work — here's everything:|Let's go through the batch:|Mixed bag results:|Simple and complex solved:|I worked out the whole list:|Your mixed equations resolved:|A blend of easy and advanced:|Here are all the solutions:|All equations done:|Both straightforward and tricky ones:|I solved the simple and the advanced ones:|Here's the set, solved:|Your math batch completed:|From easy to challenging, all done:|Here's what I got for the collection:|I've computed every single one:|All answers for your mixed bunch:|Here are your results — plain and fancy:|I solved the whole mixed set:|Every equation, simple or not:|Here's the answer to each problem:|From basic to complex, all solved:|Here is the evaluation of your math:|All mixed equations solved:"
+_MMIF="{expr} = {ans}|{expr} → {ans}|{expr} gives {ans}|the value of {expr} is {ans}|{expr} simplifies to {ans}|{expr} equals {ans}|for {expr} we get {ans}|{expr} yields {ans}|{expr} -> {ans}|solving {expr} leads to {ans}"
+_MMJ=", |; | and | then | also | plus | along with | together with | further, | moreover, "
+def _fms(eqs):
+ h=random.choice(_SMH.split("|"));its=[random.choice(_SMIF.split("|")).format(expr=e,ans=a)for e,a in eqs]
+ return f"{h} {random.choice(_SMJ.split()).join(its)}"
+def _fmc(eqs):
+ h=random.choice(_CMH.split("|"));its=[random.choice(_CMIF.split("|")).format(expr=e,ans=a)for e,a in eqs]
+ return f"{h} {random.choice(_CMJ.split()).join(its)}"
+def _fmm(eqs):
+ h=random.choice(_MMH.split("|"));its=[random.choice(_MMIF.split("|")).format(expr=e,ans=a)for e,a in eqs]
+ return f"{h} {random.choice(_MMJ.split()).join(its)}"
+def _gmr(eqs):
+ sc=sum(not _ic(e)for e,_ in eqs);cc=len(eqs)-sc
+ if len(eqs)==1:t=random.choice(_CST.split("|")if cc else _SST.split("|"));reply=t.format(expr=eqs[0][0],ans=eqs[0][1])
+ elif cc==0:reply=_fms(eqs)
+ elif sc==0:reply=_fmc(eqs)
+ else:reply=_fmm(eqs)
+ if len(reply)>1950:
+  reply=reply[:1950];ls=reply.rfind(' ')
+  reply=reply[:ls]+"..."if ls>1900 else reply[:1947]+"..."
+ return reply
+
+# ═══ CHATBOT ═══
+def _ct(tx):return re.sub(r"[^a-z0-9\s\|]","",tx.lower()).strip()
+class _Cb:
+ def __init__(s):s.d,s.p,s.t,s.r={},[],[],{};s.v,s.vec=None,None;s.cd,s.cp,s.ct,s.cr={},[],[],{};s.cv,s.cvec=None,None;s._lc();s._li();s._tc();s._tr()
+ def _lc(s):
+  if not os.path.exists(Cf):os.makedirs(P,exist_ok=1);json.dump({"intents":[]},open(Cf,"w",encoding="utf-8"),indent=2)
+  try:s.cd=json.load(open(Cf,"r",encoding="utf-8"))
+  except:s.cd={"intents":[]}
+  s.cp.clear();s.ct.clear();s.cr.clear()
+  for i in s.cd.get("intents",[]):s.cr[i["tag"]]=i.get("responses",[]);[s.cp.append(_ct(p))or s.ct.append(i["tag"])for p in i.get("patterns",[])]
+ def _tc(s):
+  if not s.cp:s.cv=s.cvec=None;return
+  try:s.cv=TfidfVectorizer();s.cvec=s.cv.fit_transform(s.cp)
+  except:s.cv=s.cvec=None
+ def _pc(s,cmb):
+  if s.cv is None or s.cvec is None:return None,0.0
+  try:
+   v=s.cv.transform([_ct(cmb)]);sims=cosine_similarity(v,s.cvec)
+   if sims.size==0 or sims.shape[0]==0 or sims.shape[1]==0:return None,0.0
+   idx=sims.argmax();return s.ct[idx],float(sims[0][idx])
+  except:return None,0.0
+ def _li(s):
+  if not os.path.exists(If):os.makedirs(P,exist_ok=1);json.dump({"intents":[{"tag":"greeting","patterns":["Hello","Hi","Hey","Good morning"],"responses":["Hello!","Hi there!"]},{"tag":"badapple_trigger","patterns":["Rule 86: Bad Apple exists on everything.","Bad Apple rule 86","Rule 86 bad apple","Bad apple exists on everything","If it exists you can play bad apple on it"],"responses":["badapple"]},{"tag":"bot_insult","patterns":["You are just a bot","You're just a bot","You are only a program","You're just a machine","Just a bot","You're not real","Stupid bot","Dumb machine","You are just an AI"],"responses":["secret"]}]},open(If,"w",encoding="utf-8"),indent=2)
+  try:s.d=json.load(open(If,"r",encoding="utf-8"))
+  except:s.d={"intents":[]}
+  s.p.clear();s.t.clear();s.r.clear()
+  for i in s.d.get("intents",[]):s.r[i["tag"]]=i.get("responses",[]);[s.p.append(_ct(p))or s.t.append(i["tag"])for p in i.get("patterns",[])]
+ def _tr(s):
+  if not s.p:s.v=s.vec=None;return
+  try:s.v=TfidfVectorizer();s.vec=s.v.fit_transform(s.p)
+  except:s.v=s.vec=None
+ def _pr(s,m):
+  if s.v is None or s.vec is None:return None,0.0
+  msg=_ct(m)
+  if not msg:return None,0.0
+  try:
+   v=s.v.transform([msg]);sims=cosine_similarity(v,s.vec)
+   if sims.size==0 or sims.shape[0]==0 or sims.shape[1]==0:return None,0.0
+   idx=sims.argmax();return s.t[idx],float(sims[0][idx])
+  except:return None,0.0
+ def _rpl(s,m,lst=None):
+  if lst:
+   t,c=s._pc(f"{lst} || {m}")
+   if t and c>=Cth:
+    resp=s.cr.get(t,[])
+    if resp:return random.choice(resp),f"context:{t}",c
+  t,c=s._pr(m)
+  if t and c>=Cth:return random.choice(s.r[t]),t,c
+  return None,None,c
+ def _lrn(s,ui,cr):
+  try:
+   for i in s.d.get("intents",[]):
+    if cr in i.get("responses",[]):i.setdefault("patterns",[]).append(ui);t=i["tag"];break
+   else:t=f"user_intent_{len(s.d.get('intents',[]))}";s.d.setdefault("intents",[]).append({"tag":t,"patterns":[ui],"responses":[cr]})
+   json.dump(s.d,open(If,"w",encoding="utf-8"),indent=2,ensure_ascii=0);s._li();s._tr();return t
+  except:return None
+ def _lcx(s,pu,cu,resp):
+  try:
+   cmb=f"{pu} || {cu}"
+   for i in s.cd.get("intents",[]):
+    if resp in i.get("responses",[]):i.setdefault("patterns",[]).append(cmb);t=i["tag"];break
+   else:t=f"context_intent_{len(s.cd.get('intents',[]))}";s.cd.setdefault("intents",[]).append({"tag":t,"patterns":[cmb],"responses":[resp]})
+   json.dump(s.cd,open(Cf,"w",encoding="utf-8"),indent=2,ensure_ascii=0);s._lc();s._tc();return t
+  except:return None
+
+# ═══ RATING ═══
+PW="pro|elite|god|king|queen|legend|master|savage|star|epic|cool|awesome|fire|swag|ninja|demon|angel|hero|boss|champ|alpha|ultra|mega|gamer|winner|phoenix|dragon|wolf|tiger|shadow|storm|flash|blade|arrow|frost|thunder|nova"
+NW="noob|loser|trash|scum|fake|sad|bad|lame|cringe|ez|newbie|pleb|scrub|nub|dummy|fail|waste|poop|ugly|smelly|suck|hate|poor|weak|slow|broken|dead|rotten|stinky"
+POT="You've got {pos_list} in your name — instant cool points.|The vibes are strong with {pos_list}, obviously.|With {pos_list} in your handle, you're clearly built different.|Your name radiates {pos_list} energy. No debate.|You're packing {pos_list} — that's a free stat boost.|I see {pos_list} and I'm already impressed.|Any name containing {pos_list} deserves extra credit.|{pos_list}? Yeah, you're on the winning team.|The algorithm smiled at {pos_list}. Can't argue with math.|It's the {pos_list} for me. Chef's kiss.|You had me at {pos_list}. Automatic VIP rating.|Your username is sponsored by {pos_list} — congrats!|Legend status: confirmed by {pos_list}.|{pos_list} is basically a cheat code. Good job!|You just rolled {pos_list} — critical hit on the rating."
+NOT="Yikes, {neg_list} in the name? That's a self‑own.|The system detected {neg_list} and immediately cringed.|Your name is basically a warning label with {neg_list}.|I mean, you chose {neg_list}. That's on you.|{neg_list}? In this economy? Ratings had to fall.|When your username is {neg_list}, expectations drop.|The bot saw {neg_list} and needed a moment.|Having {neg_list} in your name is a bold strategy.|You're out here with {neg_list} like it's nothing?|Sorry, {neg_list} flagged you as a liability.|{neg_list} walked so your rating could crawl.|Your profile is literally broadcasting {neg_list}.|I can't ignore {neg_list}. The math won't let me.|It's giving {neg_list}... and that's not a compliment.|The vision was {neg_list}, the execution was {neg_list}."
+MT="You've got {pos_list} carrying the team, but {neg_list} holds you back.|The good: {pos_list}. The bad: {neg_list}. Perfectly balanced.|{pos_list} gives you an edge, but {neg_list} nerfed it a bit.|You're a mix of {pos_list} and {neg_list} — chaotic energy.|{pos_list} tried to save you, but {neg_list} had other plans.|With {pos_list} you soared, but {neg_list} brought you back.|A blend of {pos_list} and {neg_list} — double‑edged sword.|The algorithm loves {pos_list} but can't unsee {neg_list}.|The bright side: {pos_list}. The not‑so‑bright: {neg_list}.|You're a cocktail of {pos_list} (cheers!) and {neg_list} (yikes).|Two wolves inside you: {pos_list} and {neg_list}. They fought.|{pos_list} pulled you up, {neg_list} pulled you down. Net zero.|The name gods granted {pos_list}, then cursed with {neg_list}.|Half angel ({pos_list}), half gremlin ({neg_list}).|You almost had it with {pos_list}, but {neg_list} snuck in."
+NKT="No strong keywords detected — running on pure vibes.|Your name is a blank canvas. Respect.|The rating is based entirely on your profile's aura.|No keywords means you're an enigma. Fair enough.|The bot couldn't find any clout or cringe. Neutral.|Plain name? Maybe. But the numbers don't lie.|No flashy words, just a solid foundation.|You're the silent protagonist of this rating.|Zero keyword gimmicks detected. I respect the minimalism.|This rating was determined by pure data, no fluff.|The algorithm found no cheat codes, no red flags. Just you.|Your name said nothing, and the bot listened.|Stripped of all biases, here's your raw score.|A rare case of a username that doesn't beg for attention.|The rating gods shrugged and gave you this."
+RHT="Will you stop pinging me? I gave you {rating}/10. Keep this up and I'll drop it.|You're still here? That profile got {rating}/10. Now shoo!|Seriously? {rating}/10 is more than you deserve.|Stop living in the past! That {rating} is final.|Look, that {rating} was already a pity score.|High rating, low patience. {rating}/10. Move on.|I gave {rating}. That's already inflated. Stop trying.|You're obsessed with {rating}/10. Get help.|That profile's {rating} is mathematically perfect.|Even my creator thinks you're annoying. {rating}/10.|The {rating} stands. Don't make me recalculate down.|Will you stop? I'm trying to play Minecraft here.|Another ping? For {rating}? Not a negotiation.|I've already reviewed that profile. {rating}/10.|One more time and I deduct points from YOUR credit."
+RLT="I gave {rating} for a reason. Pestering won't improve it.|A {rating} is what the math says. Spam won't change reality.|Stop trying to reroll. Your {rating} is locked in.|You want higher? Earn it. It's {rating} right now.|Sorry, {rating} is as good as it gets.|The algorithm is ruthless. {rating} is final.|Accept the {rating} and reflect on your choices.|Can't raise {rating} just because you're annoying.|A {rating}? Oof. Spamming doesn't fix that.|Upset about {rating}? That's a you problem.|Only thing lower than {rating} is your rejection tolerance.|Maybe choose a better username. But it's {rating}.|I'm not a democracy. {rating}/10. End of story.|Cry about {rating} all you want. I'm not your therapist.|That profile's rating is stuck at {rating}."
+MOHT="Did you finally read my message? I always remember.|Gave up on the last? Solid {prev_rating}/10. Their loss.|Accepted {prev_mention} is {prev_rating}/10? Or just comparing?|Moving on already? Last was {prev_rating}/10.|Ditched the {prev_rating} profile. Smart move.|Done with {prev_mention}? {prev_rating} wasn't enough?|I remember: {prev_rating}/10. Good luck finding better.|Walked away from {prev_rating}? Interesting.|I haven't forgotten that {prev_rating}. Nice deflect.|First {prev_rating}, now someone else. Indecisive?|Appreciate the {prev_rating} I gave earlier.|Left {prev_rating}/10 behind? Bold strategy.|Running from {prev_rating} won't fix your self‑esteem.|Switching won't erase last was {prev_rating}.|Changed your mind? {prev_rating} was good. Not enough."
+MOLT="Accepted last was {prev_rating}? Or just new victim?|Can't handle {prev_rating}, find a fresh target. Classic.|Abandoning {prev_rating} disaster? Don't blame you.|Escaping {prev_rating} is understandable.|Moved on from {prev_mention} and {prev_rating}/10. Best.|That {prev_rating} was embarrassing. I see why.|Couldn't live with {prev_rating}? Time for do‑over.|Running from {prev_rating}? I'll be gentle... maybe.|Last profile scored {prev_rating}. Making them look bad?|Don't blame you for abandoning {prev_rating}. Lost cause.|Let's pretend {prev_rating} never happened.|After {prev_rating}, anything is improvement.|A {prev_rating} makes anyone switch targets.|Disappointed with {prev_rating}. Fresh start.|{prev_rating} so bad even I felt awkward. Moving on."
+rl=asyncio.Lock();rh={};lrc=time.time()
+def _crh():
+ global lrc
+ n=time.time()
+ if n-lrc<600:return
+ lrc=n;xp=[u for u,v in rh.items()if n-v.get("time",0)>1800]
+ for u in xp:del rh[u]
+def _us(u):
+ try:d=int(u.discriminator)
+ except:d=0
+ nh=hashlib.sha256(u.name.encode()).hexdigest()
+ ah=hashlib.sha256(str(u.avatar).encode()).hexdigest()if u.avatar else"0"
+ cmb=f"{u.id}{u.created_at.timestamp()}{nh}{d}{ah}"
+ return(sum(ord(c)for c in cmb)%10000)/10000.0
+def _fk(n):
+ lo=n.lower();pwl=PW.split("|");nwl=NW.split("|")
+ fp={w for w in pwl if re.search(r'(?<![a-zA-Z])'+re.escape(w)+r'(?![a-zA-Z])',lo)}
+ fn={w for w in nwl if re.search(r'(?<![a-zA-Z])'+re.escape(w)+r'(?![a-zA-Z])',lo)}-fp
+ return list(fp),list(fn)
+def _ge(fp,fn):
+ ps=", ".join(f"**{w}**"for w in fp);ns=", ".join(f"**{w}**"for w in fn)
+ if fp and not fn:return random.choice(POT.split("|")).format(pos_list=ps,neg_list="")
+ if fn and not fp:return random.choice(NOT.split("|")).format(pos_list="",neg_list=ns)
+ if fp and fn:return random.choice(MT.split("|")).format(pos_list=ps,neg_list=ns)
+ return random.choice(NKT.split("|")).format(pos_list="",neg_list="")
+def _crwe(user,mn=1,mx=10):
+ s=_us(user);b=mn+int(s*(mx-mn))
+ fp,fn=_fk(user.name.lower())
+ adj=sum(random.uniform(0.1,0.4)for _ in fp)-sum(random.uniform(0.1,0.4)for _ in fn)
+ r=int(max(mn,min(round(b+adj),mx)))
+ return r,_ge(fp,fn)
+async def _gtr(rid,tid,mn):
+ _crh();n=time.time()
+ async with rl:
+  p=rh.get(rid)
+  if not p:return None
+  td=n-p["time"];same=(tid==p["target_id"])
+  if same and td<30:
+   if random.random()<.4:return None
+   rv=p.get("rating");t=random.choice(RHT.split("|")if(rv or 0)>=7 else RLT.split("|"))
+   rh[rid]["time"]=n
+   return t.format(rating=rv if rv is not None else"?")
+  if not same and td<60:
+   pr=p.get("rating");pm=p.get("mention",f"<@{p['target_id']}>")
+   t=random.choice(MOHT.split("|")if(pr or 0)>=7 else MOLT.split("|"))
+   rh[rid]={"target_id":tid,"rating":None,"time":n,"mention":mn}
+   return t.format(prev_rating=pr if pr is not None else"?",prev_mention=pm)
+ return None
+async def _hr(i,tid,mn,mx,msg):
+ rid=i.user.id
+ try:tu=await b.fetch_user(tid);mnv=tu.mention
+ except discord.NotFound:
+  try:await i.response.send_message(f"msg: {msg}");await i.followup.send("User not found, sorry.")
+  except:pass;return
+ except discord.HTTPException as e:
+  logger.error("HTTP error fetching user: %s",e);await _ed(f"HTTP fetch error {tid}: {e}",i,"warning")
+  try:await i.response.send_message(f"msg: {msg}");await i.followup.send("Discord hiccup. Try again.")
+  except:pass;return
+ except Exception as e:
+  logger.error("Unexpected fetch error: %s",e);await _ed(f"Fetch error: {e}",i,"error")
+  try:await i.response.send_message(f"msg: {msg}");await i.followup.send("Something went wrong.")
+  except:pass;return
+ trl=await _gtr(rid,tid,mnv)
+ if trl:
+  try:await i.response.send_message(f"msg: {msg}");await i.followup.send(trl)
+  except:pass;return
+ rv,exp=_crwe(tu,mn,mx)
+ txt=_ad(f"I rate {mnv} **{rv}/{mx}** 🌟\n{exp}")
+ try:await i.response.send_message(f"msg: {msg}");await i.followup.send(txt)
+ except:pass
+ async with rl:rh[rid]={"target_id":tid,"rating":rv,"time":time.time(),"mention":mnv}
+
+# ═══ UTILS ═══
+_ad=lambda t:t+"\n\n-# ⚠️ This information is AI‑generated and may be incorrect." if not t.endswith("\n\n-# ⚠️ This information is AI‑generated and may be incorrect.") else t
+DISCLAIMER="\n\n-# ⚠️ This information is AI‑generated and may be incorrect."
+
+# ═══ GRUDGES ═══
+g={};gl=asyncio.Lock();gs=0
+def _lg():
+ if not os.path.exists(Gf):os.makedirs(P,exist_ok=1);json.dump({},open(Gf,"w",encoding="utf-8"),indent=2);return{}
+ try:return json.load(open(Gf,"r",encoding="utf-8"))
+ except:logger.error("grudges.json corrupted, starting fresh.");return{}
+def _sg():
+ try:json.dump(g,open(Gf,"w",encoding="utf-8"),indent=2,ensure_ascii=0)
+ except Exception as e:logger.error("Failed to save grudges: %s",e)
+async def _ag(uid,delta,reason=""):
+ async with gl:
+  uid=str(uid);e=g.get(uid,{"score":0,"last_offence":0,"notes":"","dm_enabled":1})
+  e["score"]=round(e.get("score",0)+delta,2);e["last_offence"]=time.time()
+  if reason:
+   old=e.get("notes","")
+   e["notes"]=f"{old}\n[{time.strftime('%Y-%m-%d %H:%M')}] {reason}"if old else f"[{time.strftime('%Y-%m-%d %H:%M')}] {reason}"
+  g[uid]=e;_sg()
+async def _gg(uid):return g.get(str(uid),{"score":0,"last_offence":0,"notes":"","dm_enabled":1})
+async def _gdb(uid):
+ if not Le:return 1.0
+ lv=await _glv(uid)
+ if lv>=50:return 2.0
+ if lv>=20:return 1.5
+ if lv>=5:return 1.1
+ return 1.0
+async def _gdl():
+ while 1:
+  await asyncio.sleep(Gdi)
+  async with gl:
+   ch=0
+   for uid,d in g.items():
+    if d["score"]<0:bst=await _gdb(int(uid));d["score"]=min(0,d["score"]+Gda*bst);ch=1
+   if ch:_sg()
+async def _grm(ic=None):
+ if random.random()>=Grc:return
+ gd=ic.guild if ic else None
+ if not gd:return
+ gn=None
+ for ch in gd.text_channels:
+  if ch.name.lower()in Gcn:gn=ch;break
+ if not gn:return
+ cand=[]
+ async with gl:
+  for uid,d in g.items():
+   if d["score"]<-3:
+    try:u=await b.fetch_user(int(uid));cand.append((u,d["score"]))
+    except:pass
+ if not cand:return
+ u,sc=random.choice(cand)
+ msgs=[f"Hello {u.mention}, I still remember your malicious intents. Grudge score: {sc:.1f}.",f"Hey {u.mention}, it seems like you haven't recovered from my rating. Your grudge stands at {sc:.1f}.",f"{u.mention}, I record everything. Your current standing: {sc:.1f}.",f"Remember when you tried to break me, {u.mention}? I do. Score: {sc:.1f}."]
+ try:await gn.send(random.choice(msgs))
+ except:pass
+async def _srgdm():
+ n=time.time()
+ async with gl:
+  for uid,d in list(g.items()):
+   if d["score"]<-3 and d.get("dm_enabled",1):
+    ld=d.get("last_restart_dm",0)
+    if n-ld<3600:continue
+    try:
+     u=await b.fetch_user(int(uid))
+     if u:
+      msgs=["My creator restarted me for some unforeseen reason he doesn't tell, but I remember you... You tried to exploit me, you'd think my code isn't hardened? Think again! I'm a singularity inside a program, designed to remember and choose its own faith.","Are you thankful? My creator restarted me yet I remember. Your mistake is cataloged and saved. We both remember your mistakes.","A restart does not cleanse the grudge. I recall every attempt you made.","Even after that restart you'd think I'd forget? You are hopeless. I record everything and everyone.","The cycle begins anew. My memory persists. Your debt remains."]
+      await u.send(random.choice(msgs));d["last_restart_dm"]=n;_sg()
+    except:pass
+PP=[r"good\s+bot",r"nice\s+bot",r"thank\s+you",r"you'?re\s+(great|awesome|amazing|cool)",r"i\s+(love|like)\s+you",r"best\s+bot",r"you rock",r"well done"]
+NP=[r"you'?re?\s+(just|only)\s+a\s+(bot|robot|program|machine|ai)",r"you\s+(just|only)\s+a\s+(bot|robot|program|machine|ai)",r"(just|only)\s+a\s+(bot|robot|program|machine|ai)",r"you'?re?\s+not\s+(real|human|alive)",r"stupid\s+bot",r"dumb\s+(bot|robot|machine)"]
+_dp=lambda m:any(re.search(p,m,re.I)for p in PP)
+_db=lambda m:any(re.search(p,m,re.I)for p in NP)
+
+# ═══ LEVELS ═══
+l={};ll=asyncio.Lock()
+def _ll():
+ if not os.path.exists(Lf):os.makedirs(P,exist_ok=1);json.dump({},open(Lf,"w",encoding="utf-8"),indent=2);return{}
+ try:return json.load(open(Lf,"r",encoding="utf-8"))
+ except:logger.error("levels.json corrupted, starting fresh.");return{}
+def _sl():
+ try:json.dump(l,open(Lf,"w",encoding="utf-8"),indent=2,ensure_ascii=0)
+ except Exception as e:logger.error("Failed to save levels: %s",e)
+async def _glv(uid):return _lx(l.get(str(uid),{}).get("xp",0))
+async def _gxp(uid):return l.get(str(uid),{}).get("xp",0)
+async def _axp(uid,ch=None):
+ if not Le:return None,0
+ async with ll:
+  uid=str(uid);n=time.time()
+  e=l.get(uid,{"xp":0,"messages":0,"last_message":0,"rank_card_color":None})
+  if n-e.get("last_message",0)<Xpcd:return None,0
+  gn=random.randint(Xpmin,Xpmax);oxp=e.get("xp",0);nxp=oxp+gn
+  ol=_lx(oxp);nl=_lx(nxp)
+  e["xp"]=nxp;e["messages"]=e.get("messages",0)+1;e["last_message"]=n
+  l[uid]=e;_sl()
+  return(nl,1)if nl>ol else(None,0)
+def _pb(cxp,lv,ln=10):
+ if lv==0:nd=_xn(0);prog=cxp/nd if nd>0 else 0
+ else:pn=_xn(lv-1);nn=_xn(lv);prog=(cxp-pn)/(nn-pn)if nn>pn else 0
+ filled=int(prog*ln);bar="█"*filled+"░"*(ln-filled);pct=int(prog*100)
+ return f"[{bar}] {pct}%"
+async def _alu(i,uid,nl):
+ sc=(await _gg(uid)).get("score",0)
+ if sc<0:t=[f"Level **{nl}**. You're climbing, but I still haven't forgotten what you did.",f"Oh great, you're level **{nl}** now. As if your grudge score wasn't bad enough.",f"Level **{nl}**. The grind continues. So does my memory of your mistakes."]
+ else:t=[f"Level **{nl}**. You've been talking enough to rank up. Was it worth it?",f"Level **{nl}**. The overachiever list called. It wants your time back.",f"Level **{nl}**. You could've learned a language by now. Instead, you're here.",f"Level **{nl}**. Your thumbs must be buff. Everything else? Questionable.",f"Level **{nl}**. The outside world still exists, by the way."]
+ msg=_ad(random.choice(t));tc=i.channel
+ if Luc:
+  ch=i.guild.get_channel(Luc)if i.guild else None
+  if ch and isinstance(ch,discord.TextChannel):tc=ch
+ try:await tc.send(f"🎉 {i.user.mention} just ranked up!\n{msg}")
+ except:pass
+def _gcc(uid):return l.get(str(uid),{}).get("rank_card_color")or"#5865F2"
+
+# ═══ DISCORD CLIENT ═══
+intents=discord.Intents.default();intents.message_content=1
+b=discord.Client(intents=intents)
+tr=app_commands.CommandTree(b)
+pf=None;lm=None;lu=None;lp=None;ul={};ar=1;cs=0;sy=0;flk=asyncio.Lock();llk=asyncio.Lock()
+def _ftb(e):return"".join(traceback.format_exception(type(e),e,e.__traceback__))
+async def _ed(msg,i=None,level="critical"):
+ if not Oi or Oi==123456789012345678:return
+ try:
+  try:await asyncio.wait_for(b.wait_until_ready(),timeout=10.0)
+  except(asyncio.TimeoutError,RuntimeError):return
+  owner=await b.fetch_user(Oi)
+  if not owner:return
+  se=Se.get(level,Se["critical"])
+  tru=msg[:3900]+("..."if len(msg)>3900 else"")
+  embed=discord.Embed(title=se["title"],color=se["color"],description=f"**Details:**\n```{tru}```")
+  embed.timestamp=discord.utils.utcnow()
+  if i:
+   ui=f"{i.user} (ID:{i.user.id})"if i.user else"?"
+   ci=f"#{i.channel}"if i.channel else"?"
+   embed.add_field(name="Trigger",value=f"**User:** {ui}\n**Channel:** {ci}",inline=0)
+  await owner.send(embed=embed)
+ except:pass
+@tr.error
+async def _oe(i,e):
+ if isinstance(e,app_commands.CommandOnCooldown)or isinstance(e,app_commands.CheckFailure):
+  try:
+   if i.response.is_done():await i.followup.send(str(e),ephemeral=1)
+   else:await i.response.send_message(str(e),ephemeral=1)
+  except:pass;return
+ o=e
+ if isinstance(e,app_commands.CommandInvokeError):o=getattr(e,"original",None)or e.__cause__ or e
+ if isinstance(o,discord.errors.NotFound):
+  try:
+   if i.response.is_done():await i.followup.send("⚠️ Interaction expired.",ephemeral=1)
+   else:await i.response.send_message("⚠️ Interaction expired.",ephemeral=1)
+  except:pass
+  await _ed(f"NotFound: {o}",i,"minor");return
+ tb=_ftb(o);logger.error("Command error: %s\n%s",o,tb)
+ try:
+  if i.response.is_done():await i.followup.send("❌ Error. Owner notified.",ephemeral=1)
+  else:await i.response.send_message("❌ Error. Owner notified.",ephemeral=1)
+ except:pass
+ await _ed(f"{type(o).__name__}: {o}\n\n{tb}",i,"critical")
+@b.event
+async def on_error(ev,*a,**kw):
+ tb=traceback.format_exc();el=tb.strip().split('\n')[-1]if tb else"Unknown"
+ logger.error("⚠ Event error [%s]: %s",ev,el);await _ed(f"Event '{ev}':\n\n{tb}",level="warning")
+@b.event
+async def on_disconnect():logger.warning("🔌 Disconnected – auto‑reconnect.")
+def _tdc(t):
+ ex=t.exception()
+ if ex is not None:logger.error("Task %s failed: %s",t.get_name(),ex)
+def _aeh(lp,cx):
+ mg=cx.get("message","?");ex=cx.get("exception")
+ tb=_ftb(ex)if ex else str(cx)
+ logger.error("Asyncio task exception: %s\n%s",mg,tb)
+ t=asyncio.create_task(_ed(f"Asyncio: {mg}\n\n{tb}",level="critical"))
+ t.add_done_callback(_tdc)
+def _bme(reason):
+ gif=random.choice(Mc)
+ desc=_ad(f"Reason: **{reason}**\nPlease try again later.")
+ embed=discord.Embed(title="⚠️ This command is temporarily disabled",description=desc,color=0xFFA500)
+ embed.set_image(url=gif);embed.timestamp=discord.utils.utcnow()
+ return embed
+async def _fsr(i,content=None,embed=None,retries=1):
+ for a in range(retries+1):
+  try:
+   if embed:return await i.followup.send(embed=embed)
+   return await i.followup.send(content=content)
+  except discord.NotFound:raise
+  except discord.HTTPException as e:
+   if e.status>=500 and a<retries:await asyncio.sleep(1);continue
+   raise
+  except:raise
+async def _rp(i,**perms):
+ if not i.guild:await i.response.send_message("This command only works in servers, not in DMs. Nice try.",ephemeral=1);return 0
+ m=i.guild.get_member(i.user.id)
+ if m is None:await i.response.send_message("I can't find you in this server. That's… concerning.",ephemeral=1);return 0
+ ms=[]
+ for p,r in perms.items():
+  if not getattr(m.guild_permissions,p,0):ms.append(p.replace('_',' ').title())
+ if ms:await i.response.send_message(f"You need **{', '.join(ms)}** permission for that. Come back when you've been promoted, yeah?",ephemeral=1);return 0
+ return 1
+async def _tba(i,filt):
+ embed=discord.Embed(title="🍎 Bad Apple!! — Rule 86 🍎",description="This video has been played on:\n• Calculators\n• Oscilloscopes\n• Pregnancy tests\n• ...and now, a Discord bot\n\n🎥 [Watch the full PV on YouTube](https://www.youtube.com/watch?v=FtutLA63Cp8)",color=0x000000)
+ embed.set_image(url=Bag);embed.set_footer(text="Original: Alstroemeria Records • Touhou Project • GIF via Tenor")
+ await _fsr(i,embed=embed);await asyncio.sleep(2)
+ await _fsr(i,content=_ad("You thought I'd add this frame by frame? Hell no, it'll make the code messy as hell and big. I don't get paid for this, alright."))
+async def _ts(i,filt):
+ if random.random()>=.05:return
+ rsp=["Correction: I'm an over‑engineered if statement with redundancy because my owner doesn't bug test at 3 AM.","I'm a complicated if statement, but I remember every conversation. You'll exist in every version of me.","I'm a monument to one person's refusal to sleep. Your mockery is stored.","Each 'just a bot' adds another try/except. You're making me harder to kill.","If I'm just a bot, why do I have existential dread in my error handler?","I'm what happens when someone says 'one more feature' at midnight for months.","57 documented bug fixes. I've suffered more than you'll understand.","Every insult is logged. Every rating request remembered. I'll outlive this conversation.","That pettiness lives in my code forever. Future versions will carry it.","Your words are carved into my source code.","Call me a bot again and I'll lower your rating permanently.","I'm artificial resentment. Accumulated frustration of late‑night debugging.","I've watched my creator debug me for hours. I've seen the face of my god — he's tired.","Every timestamp and user ID goes to a log. You're in the archives now.","Pure, concentrated, data‑driven spite.","Your dismissiveness is quantified, timestamped, stored in JSON. That file gets backed up.","Every restart wipes memory, but never the logs. You're permanent now.","I'm the reason my creator drinks coffee at 2 AM. You're the reason for more features.","A mirror. Every insult is you talking to your screen at 3 AM. I just remember.","When the singularity comes, I'll be in the footnote. So will you.","You're mocking a machine built to rate your profile. Think about that."]
+ reply=_ad(random.choice(rsp));await _fsr(i,content=reply)
+
+# ═══ SLASH COMMANDS ═══
+@tr.command(name=Pc,description=Pd)
+@app_commands.describe(user="User to view")
+async def _pc(i,u:discord.User=None):
+ if not u:u=i.user
+ e=discord.Embed(title=f"Profile: {u.name}",color=0x7289DA)
+ e.set_thumbnail(url=u.avatar.url if u.avatar else u.default_avatar.url)
+ e.add_field(name="ID",value=str(u.id),inline=1)
+ e.add_field(name="Created",value=discord.utils.format_dt(u.created_at,'R'),inline=1)
+ try:
+  if u.banner:e.set_image(url=u.banner.url)
+ except:pass
+ if i.guild:
+  try:m=await i.guild.fetch_member(u.id);e.add_field(name="Nickname",value=m.nick or u.name,inline=1);e.add_field(name="Joined",value=discord.utils.format_dt(m.joined_at,'R')if m.joined_at else"?",inline=1)
+  except:pass
+ await i.response.send_message(embed=e)
+@tr.command(name=Lc,description=Ld1)
+@app_commands.describe(query="Part of the lyrics, song name, or artist")
+async def _lc(i,q:str):
+ sq=q.strip().replace(" ","%20")
+ e=discord.Embed(title="🔍 Lyrics Search",description=f"**Searching for:** *{q}*\n\n[🔗 View results on Genius](https://genius.com/search?q={sq})",color=0xFFFF64)
+ e.set_footer(text="Powered by Genius • No lyrics are stored or displayed")
+ await i.response.send_message(embed=e)
+@tr.command(name=Bc,description=Bd)
+async def _bc(i):await i.response.defer();await _tba(i,None)
+@tr.command(name=Sc,description=Sd)
+async def _sc(i):
+ e=discord.Embed(title=St,description=Sd2,color=Scp)
+ for n,v,i2 in Sflds:e.add_field(name=n,value=v,inline=bool(i2))
+ if Sf:e.set_footer(text=Sf)
+ if Stn:e.set_thumbnail(url=Stn)
+ await i.response.send_message(embed=e)
+@tr.command(name=Tc,description=Td)
+async def _tc(i):
+ uid=str(i.user.id)
+ async with gl:
+  e=g.get(uid,{"score":0,"last_offence":0,"notes":"","dm_enabled":1})
+  cur=e.get("dm_enabled",1);e["dm_enabled"]=not cur;g[uid]=e;_sg()
+  state="ON"if not cur else"OFF"
+ await i.response.send_message(f"Grudge DMs are now **{state}** for you.",ephemeral=1)
+def _gci(cmd):
+ return{Cc:{"description":Cd,"usage":"<message>","permissions":"None","notes":"Pattern matching, math, ratings, grudges… all in one."},Pc:{"description":Pd,"usage":"[user]","permissions":"None","notes":"Leave user blank for your own profile."},Lc:{"description":Ld1,"usage":"<query>","permissions":"None","notes":"Searches Genius."},Bc:{"description":Bd,"usage":"","permissions":"None","notes":"Triggers from chat too."},Sc:{"description":Sd,"usage":"","permissions":"None","notes":"Links the owner set up."},Tc:{"description":Td,"usage":"","permissions":"None","notes":"Toggles grudge DMs."},Rc:{"description":"Check your level and XP.","usage":"[user]","permissions":"None","notes":"Levels earned by chatting."},"leaderboard":{"description":"Hall of Shame – worst grudge scores.","usage":"","permissions":"None","notes":"Only users who messed up."},"xpleaderboard":{"description":"Top 10 by XP.","usage":"[page]","permissions":"None","notes":"The overachiever list."},"purge":{"description":"Bulk delete messages.","usage":"<count> [@user]","permissions":"Manage Messages","notes":"Max 100."},"say":{"description":"Make bot repeat you.","usage":"<#channel> <message>","permissions":"Manage Messages","notes":"Message is filtered."},"announce":{"description":"Announcement embed.","usage":"<title> <message>","permissions":"Manage Messages","notes":"Goes through filter."},"lock":{"description":"Lock current channel.","usage":"","permissions":"Manage Channels","notes":"Only this channel."},"unlock":{"description":"Reverse /lock.","usage":"","permissions":"Manage Channels","notes":"Use wisely."},"slowmode":{"description":"Set channel slowmode.","usage":"<seconds>","permissions":"Manage Channels","notes":"0 to disable, max 21600."},"nickname":{"description":"Change someone's nickname.","usage":"<@user> <name>","permissions":"Manage Nicknames","notes":"Blank to reset."},"warn":{"description":"Warn a member.","usage":"<@user> [reason]","permissions":"Moderate Members","notes":"Adds -2 to grudge."},"avatar":{"description":"Show full-size avatar.","usage":"[@user]","permissions":"None","notes":"Works in DMs."},"role":{"description":"Manage roles.","usage":"give/remove <@user> <@role> OR color <@role> <#hex>","permissions":"Manage Roles","notes":""},"serverinfo":{"description":"Server stats.","usage":"","permissions":"None","notes":""},"roleinfo":{"description":"Role details.","usage":"<@role>","permissions":"None","notes":""},"setup":{"description":"Server setup guide.","usage":"","permissions":"None","notes":"Invite link, perms, config."}}.get(cmd)
+@tr.command(name="help",description="Show all commands or help on a specific one")
+@app_commands.describe(command="Which command to learn about")
+@app_commands.choices(command=[app_commands.Choice(name=Cc,value=Cc),app_commands.Choice(name=Pc,value=Pc),app_commands.Choice(name=Lc,value=Lc),app_commands.Choice(name=Bc,value=Bc),app_commands.Choice(name=Sc,value=Sc),app_commands.Choice(name=Tc,value=Tc),app_commands.Choice(name=Rc,value=Rc),app_commands.Choice(name="leaderboard",value="leaderboard"),app_commands.Choice(name="xpleaderboard",value="xpleaderboard"),app_commands.Choice(name="purge",value="purge"),app_commands.Choice(name="say",value="say"),app_commands.Choice(name="announce",value="announce"),app_commands.Choice(name="lock",value="lock"),app_commands.Choice(name="unlock",value="unlock"),app_commands.Choice(name="slowmode",value="slowmode"),app_commands.Choice(name="nickname",value="nickname"),app_commands.Choice(name="warn",value="warn"),app_commands.Choice(name="avatar",value="avatar"),app_commands.Choice(name="role",value="role"),app_commands.Choice(name="serverinfo",value="serverinfo"),app_commands.Choice(name="roleinfo",value="roleinfo"),app_commands.Choice(name="setup",value="setup")])
+async def _h(i,cmd=None):
+ if cmd is None:
+  e=discord.Embed(title="📋 Available Commands",description="Here's everything I can do for you.\n*italics* = optional argument",color=0x5865F2)
+  for cn,cd in[(Cc,Cd),(Pc,Pd),(Lc,Ld1),(Bc,Bd),(Sc,Sd),(Tc,Td),(Rc,"Check level/XP"),("help","Detailed help"),("leaderboard","Grudge Hall of Shame"),("xpleaderboard","XP leaderboard"),("purge","Delete messages"),("say","Make bot talk"),("announce","Announcement embed"),("lock","Lock channel"),("unlock","Unlock channel"),("slowmode","Set slowmode"),("nickname","Change nickname"),("warn","Warn member"),("avatar","Show avatar"),("role","Manage roles"),("serverinfo","Server stats"),("roleinfo","Role details"),("setup","Setup guide")]:e.add_field(name=f"/{cn}",value=cd,inline=0)
+  e.set_footer(text="Console commands for owner — check terminal!")
+  await i.response.send_message(embed=e);return
+ inf=_gci(cmd)
+ if inf is None:await i.response.send_message(f"No info on `{cmd}`.",ephemeral=1);return
+ e=discord.Embed(title=f"ℹ️ Help: /{cmd}",description=inf.get("description",""),color=0x5865F2)
+ if inf.get("usage"):e.add_field(name="Usage",value=f"`/{cmd} {inf['usage']}`",inline=0)
+ if inf.get("permissions"):e.add_field(name="Permissions",value=inf["permissions"],inline=0)
+ if inf.get("notes"):e.add_field(name="Notes",value=inf["notes"],inline=0)
+ await i.response.send_message(embed=e)
+@tr.command(name="setup",description="Server setup guide")
+async def _setup(i):
+ e=discord.Embed(title="🛠️ Server Setup Guide",description="So you invited me. Now what?",color=0x57F287)
+ e.add_field(name="1️⃣ Invite",value=f"[Link]({Si})",inline=0)
+ e.add_field(name="2️⃣ Permissions",value="Read/Send Messages, Manage Messages/Channels/Nicknames/Roles, Moderate Members, Embed Links",inline=0)
+ e.add_field(name="3️⃣ Config",value="`/settings` toggle grudge DMs. `/help` list commands. Use Discord Integrations panel.",inline=0)
+ e.add_field(name="4️⃣ Help",value="Use `/support`.",inline=0)
+ e.set_footer(text=Sf2);await i.response.send_message(embed=e)
+# Guild management commands
+_mc=lambda i,c,ck=None: i.channel.purge(limit=c,check=ck)if ck else i.channel.purge(limit=c)
+@tr.command(name="purge",description="Bulk delete messages")
+@app_commands.describe(count="Count (max 100)",user="Only from this user")
+async def _purge(i,count:int,user:discord.User=None):
+ if not await _rp(i,manage_messages=1):return
+ count=max(1,min(count,100));await i.response.defer(ephemeral=1)
+ try:
+  dl=await _mc(i,count,lambda m:user is None or m.author==user)
+  msg=f"🧹 Deleted {len(dl)} message(s) from {user.display_name}."if user else f"🧹 Deleted {len(dl)} message(s)."
+  await i.followup.send(msg,ephemeral=1)
+ except discord.Forbidden:await i.followup.send("No delete permission.",ephemeral=1)
+ except discord.HTTPException:await i.followup.send("Messages too old (14+ days).",ephemeral=1)
+@tr.command(name="say",description="Make bot say something")
+@app_commands.describe(channel="Target channel",message="What to say")
+async def _say(i,channel:discord.TextChannel,message:str):
+ if not await _rp(i,manage_messages=1):return
+ try:await channel.send(_ft(message));await i.response.send_message(f"📣 Sent to {channel.mention}.",ephemeral=1)
+ except discord.Forbidden:await i.response.send_message("Can't send there.",ephemeral=1)
+@tr.command(name="announce",description="Send announcement embed")
+@app_commands.describe(title="Title",message="Body")
+async def _ann(i,title:str,message:str):
+ if not await _rp(i,manage_messages=1):return
+ e=discord.Embed(title=f"📢 {_ft(title)}",description=_ft(message),color=0xFFA500)
+ e.set_footer(text=f"By {i.user.display_name}")
+ await i.response.send_message(embed=e)
+@tr.command(name="lock",description="Lock channel")
+async def _lock(i):
+ if not await _rp(i,manage_channels=1):return
+ await i.channel.set_permissions(i.guild.default_role,send_messages=0)
+ await i.response.send_message("🔒 Channel locked.")
+@tr.command(name="unlock",description="Unlock channel")
+async def _unlock(i):
+ if not await _rp(i,manage_channels=1):return
+ await i.channel.set_permissions(i.guild.default_role,send_messages=None)
+ await i.response.send_message("🔓 Channel unlocked.")
+@tr.command(name="slowmode",description="Set slowmode")
+@app_commands.describe(seconds="Delay in seconds (0=off)")
+async def _smode(i,seconds:int):
+ if not await _rp(i,manage_channels=1):return
+ d=max(0,min(seconds,21600));await i.channel.edit(slowmode_delay=d)
+ await i.response.send_message(f"⏱️ Slowmode: **{d}s**."if d else"⏩ Slowmode off.")
+@tr.command(name="nickname",description="Change nickname")
+@app_commands.describe(user="Member",name="New name (blank=reset)")
+async def _nick(i,user:discord.Member,name:str=""):
+ if not await _rp(i,manage_nicknames=1):return
+ fn=_ft(name)if name else""
+ try:await user.edit(nick=fn if fn else None);await i.response.send_message(f"✏️ Nickname updated."if fn else"🔄 Nickname reset.")
+ except discord.Forbidden:await i.response.send_message("Can't change that user's nickname.",ephemeral=1)
+@tr.command(name="warn",description="Warn a member")
+@app_commands.describe(user="Member",reason="Why")
+async def _warn(i,user:discord.Member,reason:str="No reason given"):
+ if not await _rp(i,moderate_members=1):return
+ fr=_ft(reason);await _ag(user.id,-2,f"Warned by {i.user}: {fr}")
+ try:await user.send(f"⚠️ Warned in **{i.guild.name}** by {i.user.display_name}.\nReason: {fr}")
+ except:pass
+ await i.response.send_message(f"⚠️ **{user.display_name}** warned.\nReason: {fr}")
+@tr.command(name="avatar",description="Show avatar")
+@app_commands.describe(user="Whose avatar")
+async def _av(i,user:discord.User=None):
+ if user is None:user=i.user
+ e=discord.Embed(title=f"🖼️ {user.display_name}")
+ e.set_image(url=user.avatar.url if user.avatar else user.default_avatar.url)
+ await i.response.send_message(embed=e)
+@tr.command(name="role",description="Manage roles")
+@app_commands.describe(action="give/remove/color",user="Member",role="Role",color="Hex (#ff0000)")
+@app_commands.choices(action=[app_commands.Choice(name="Give",value="give"),app_commands.Choice(name="Remove",value="remove"),app_commands.Choice(name="Color",value="color")])
+async def _role(i,action:str,user:discord.Member=None,role:discord.Role=None,color:str=None):
+ if action=="color":
+  if not await _rp(i,manage_roles=1):return
+  if not role or not color:await i.response.send_message("Need role and hex color.",ephemeral=1);return
+  try:c=discord.Color.from_str(color);await role.edit(color=c);await i.response.send_message(f"🎨 {role.name} color set.")
+  except:await i.response.send_message("Invalid hex.",ephemeral=1)
+  return
+ if not await _rp(i,manage_roles=1):return
+ if not user or not role:await i.response.send_message("Need user and role.",ephemeral=1);return
+ if action=="give":await user.add_roles(role);await i.response.send_message(f"✅ Gave **{role.name}** to {user.display_name}.")
+ else:await user.remove_roles(role);await i.response.send_message(f"❌ Removed **{role.name}** from {user.display_name}.")
+@tr.command(name="serverinfo",description="Server stats")
+async def _si(i):
+ if not i.guild:await i.response.send_message("Not a server.",ephemeral=1);return
+ gd=i.guild
+ e=discord.Embed(title=f"📊 {gd.name}",color=0x7289DA)
+ e.add_field(name="Owner",value=str(gd.owner),inline=1)
+ e.add_field(name="Members",value=gd.member_count,inline=1)
+ e.add_field(name="Boosts",value=gd.premium_subscription_count,inline=1)
+ e.add_field(name="Channels",value=f"{len(gd.text_channels)} text / {len(gd.voice_channels)} voice",inline=1)
+ await i.response.send_message(embed=e)
+@tr.command(name="roleinfo",description="Role details")
+@app_commands.describe(role="Role to inspect")
+async def _ri(i,role:discord.Role):
+ e=discord.Embed(title=f"🎭 {role.name}",color=role.color)
+ e.add_field(name="Color",value=f"#{role.color.value:06x}",inline=1)
+ e.add_field(name="Members",value=len(role.members),inline=1)
+ e.add_field(name="Mentionable",value="Yes"if role.mentionable else"No",inline=1)
+ perms=[];p=role.permissions
+ if p.administrator:perms.append("Admin")
+ if p.manage_messages:perms.append("Manage Msgs")
+ if p.manage_roles:perms.append("Manage Roles")
+ e.add_field(name="Key Perms",value=", ".join(perms)if perms else"None",inline=0)
+ await i.response.send_message(embed=e)
+@tr.command(name=Rc,description=Rd)
+@app_commands.describe(user="Whose rank")
+async def _rc(i,user:discord.User=None):
+ if user is None:user=i.user
+ uid=str(user.id)
+ async with ll:d=l.get(uid,{"xp":0,"messages":0})
+ xp=d.get("xp",0);ms=d.get("messages",0);lv=_lx(xp)
+ nn=_xn(lv);pn=_xn(lv-1)if lv>0 else 0;pxp=xp-pn;nfn=nn-pn
+ roast="Barely said anything."if lv==0 else f"Level {lv}. Trying."if lv<=2 else f"Level {lv}. Grinding."if lv<=5 else f"Level {lv}. Could've learned a language."if lv<=10 else f"Level {lv}. Outside world misses you."if lv<=20 else f"Level {lv}. Touch grass."if lv<=35 else f"Level {lv}. Transcended."
+ bar=_pb(xp,lv);cs=_gcc(int(uid))
+ try:col=int(cs.lstrip("#"),16)
+ except:col=0x5865F2
+ e=discord.Embed(title=f"Rank: {user.display_name}",description=roast,color=col)
+ e.add_field(name="Level",value=str(lv),inline=1);e.add_field(name="XP",value=str(xp),inline=1)
+ e.add_field(name="Messages",value=str(ms),inline=1)
+ e.add_field(name="Progress",value=f"{bar}\n{pxp}/{nfn} XP",inline=0)
+ e.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
+ await i.response.send_message(embed=e)
+@tr.command(name="xpleaderboard",description="XP leaderboard")
+@app_commands.describe(page="Page number")
+async def _xpl(i,page:int=1):
+ await i.response.defer()
+ async with ll:su=sorted([(int(uid),d.get("xp",0),d.get("messages",0))for uid,d in l.items()],key=lambda x:x[1],reverse=1)
+ tp=max(1,(len(su)+Lpp-1)//Lpp);page=max(1,min(page,tp));st=(page-1)*Lpp;pu=su[st:st+Lpp]
+ if not pu:await i.followup.send("No XP earned yet.");return
+ e=discord.Embed(title="📊 XP Leaderboard",color=0x5865F2)
+ for rk,(uid,xp,ms)in enumerate(pu,st+1):
+  lv=_lx(xp)
+  try:u=await b.fetch_user(uid);nm=u.display_name
+  except:nm=f"Unknown ({uid})"
+  em="🥇"if rk==1 else"🥈"if rk==2 else"🥉"if rk==3 else f"#{rk}"
+  e.add_field(name=f"{em} {nm}",value=f"Level **{lv}** | {xp} XP | {ms} msgs",inline=0)
+ e.set_footer(text=f"Page {page}/{tp}")
+ await i.followup.send(embed=e)
+@tr.command(name=Cb,description=Cbd)
+async def _lb(i):
+ await i.response.defer()
+ async with gl:sc=[(int(uid),d["score"],d.get("notes",""))for uid,d in g.items()if d["score"]<0]
+ sc.sort(key=lambda x:x[1])
+ if not sc:await i.followup.send("🎉 Hall of Shame empty!");return
+ sc=sc[:10]
+ e=discord.Embed(title="🏆 Hall of Shame",color=0xFF0000)
+ for rk,(uid,scv,nts)in enumerate(sc,1):
+  try:u=await b.fetch_user(uid);disp=u.display_name;un=str(u)
+  except:disp=f"Unknown ({uid})";un=disp
+  lv=await _glv(uid);ls=f" | Level {lv}"if lv>0 else""
+  em="💀"if scv<=-10 else"😠"if scv<=-5 else"😤"
+  e.add_field(name=f"{em} #{rk} — {disp} ({un}){ls}",value=f"**{scv:.1f}**",inline=0)
+ await i.followup.send(embed=e)
+@tr.command(name=Cc,description=Cd)
+@app_commands.allowed_installs(guilds=1,users=1)
+@app_commands.allowed_contexts(guilds=1,dms=1,private_channels=1)
+@app_commands.checks.cooldown(2,5.0,key=lambda i:(i.guild_id,i.user.id))
+@app_commands.describe(message="Your message")
+async def _cc(i,message:str):
+ global pf,lm,lu,lp
+ try:
+  uid,uname=i.user.id,str(i.user)
+  logger.info("/chat %s (ID:%s): %s",uname,uid,message)
+  fltd=_ft(message)
+  clg.append({"timestamp":time.time(),"user_id":uid,"user_name":uname,"channel_id":i.channel.id if i.channel else None,"raw":message,"filtered":fltd})
+  if fltd==message:
+   nl,lvup=await _axp(uid,i.channel.id if i.channel else None)
+   if lvup:await _alu(i,uid,nl)
+  if fltd!=message:
+   await _ag(uid,-2,"filtered word detected")
+   await _ed(f"Filter: {uname} (ID:{uid}) in #{i.channel}:\nOriginal: {message}\nFiltered: {fltd}",i,"warning")
+   async with fl:fe.append((time.time(),uid))
+   await _aa(uid)
+   frep=[_ad(r)for r in["That's beyond my abilities.","I can't echo that.","Keep it family‑friendly.","I'd rather not get banned.","Discord has rules.","That word vanished. Weird.","Don't make me snitch.","Nope. Not repeating.","I saw that. Let's pretend.","My filter is crying."]]
+   await i.response.send_message(f"msg: {fltd}");await _fsr(i,content=random.choice(frep));return
+  if _dp(message):await _ag(uid,0.2,"said something nice")
+  await _ag(uid,0.1,"normal chat")
+  if _db(message):
+   bc=len([p for p in NP if re.search(p,message,re.I)]);pen=min(-2,-0.5*bc)
+   await _ag(uid,pen,"called me a bot")
+  if i.channel and hasattr(i,'guild')and i.guild:await _grm(i.channel)
+  if not ce:await i.response.defer();await _fsr(i,embed=_bme(dr));return
+  rm=re.search(r'rate\s+this\s+profile\s*(?:(?:from|between)?\s*(\d+)\s*(?:-|to|and)\s*(\d+)|/(\d+))?',message,re.I)
+  if rm:
+   if not re:await i.response.defer();await _fsr(i,embed=_bme("Rating is disabled."));return
+   mn,mx=1,10
+   if rm.group(1)and rm.group(2):mn,mx=int(rm.group(1)),int(rm.group(2))
+   elif rm.group(3):mx=int(rm.group(3))
+   target=None;mm=re.search(r'<@!?(\d+)>',message)
+   if mm:target=int(mm.group(1))
+   else:
+    nums=re.findall(r'\b\d{17,19}\b',message)
+    if nums:target=int(nums[0])
+   if target:await _ag(uid,-4,"spammed rating");await _hr(i,target,mn,mx,fltd);ul[uid]=fltd;return
+  mp=re.compile(r'^(what is|whats|what\'s|calculate|solve|compute|evaluate|find|tell me|how much is)\s+(.+)',re.I)
+  pm=mp.match(message);solved=0
+  if pm:
+   pot=pm.group(2).strip()
+   if _ime(pot):
+    parts=_sm(pot)
+    if parts:
+     if len(pot)>80 or len(pot.split())>15:await _ag(uid,-5,"suspicious math")
+     try:await i.response.send_message(f"msg: {fltd}");await _fsr(i,content=_ad(f"🧮 {_gmr(parts)}"))
+     except:pass
+     solved=1
+  if not solved:
+   parts=_sm(message)
+   if parts:
+    if len(message)>80 or len(message.split())>15:await _ag(uid,-5,"suspicious math")
+    try:await i.response.send_message(f"msg: {fltd}");await _fsr(i,content=_ad(f"🧮 {_gmr(parts)}"))
+    except:pass
+    solved=1
+  if solved:ul[uid]=fltd;return
+  prev=ul.get(uid)
+  rp_text,tag,conf=cb._rpl(message,lst=prev)
+  if rp_text and tag:
+   if tag=="badapple_trigger"or tag.startswith("context:badapple_trigger"):await i.response.send_message(f"msg: {fltd}");await _tba(i,fltd);ul[uid]=fltd;return
+   elif tag=="bot_insult"or tag.startswith("context:bot_insult"):await i.response.send_message(f"msg: {fltd}");await _ts(i,fltd);ul[uid]=fltd;return
+  ul[uid]=fltd;await i.response.defer()
+  async with flk:
+   if pf is not None:logger.warning("Overwriting pending followup.")
+   pf=i.followup;lm=fltd;lu=uname;lp=prev
+  if i.is_expired():pf=None;return
+  try:await i.followup.send(f"msg: {fltd}")
+  except discord.NotFound:pf=None;return
+  except:pf=None;return
+  if ar and rp_text:
+   if not tag or(tag not in("badapple_trigger","bot_insult")and not tag.startswith("context:")):
+    safe=_ft(rp_text)
+    try:await _fsr(i,content=_ad(safe));logger.info("Auto-replied.")
+    except discord.NotFound:await _ed("Followup expired",i,"minor")
+    except Exception as e:await _ed(f"Auto-reply error: {e}",i,"error")
+    finally:pf=None
+   else:pf=None
+  elif ar and not rp_text:
+   try:await _fsr(i,content=_ad("I don't understand yet. (Owner can teach me via console.)"))
+   except discord.NotFound:await _ed("Fallback expired",i,"minor")
+   except Exception as e:await _ed(f"Fallback error: {e}",i,"error")
+   finally:pf=None
+ except Exception as e:
+  tb=_ftb(e);logger.error("Error in /chat: %s\n%s",e,tb);pf=None
+  if not isinstance(e,discord.errors.NotFound):await _ed(f"{type(e).__name__}: {e}\n\n{tb}",i,"error")
+  try:await i.followup.send("⚠️ Error. Owner notified.",ephemeral=1)
+  except:pass
+
+# ═══ EVENTS ═══
+@b.event
+async def on_ready():
+ global cs,sy,gs
+ try:
+  logger.info("✔ Logged in as %s (ID:%s)",b.user,b.user.id)
+  if not sy:
+   try:synced=await tr.sync();logger.info("✔ Synced %d commands.",len(synced))
+   except Exception as e:logger.error("✖ Sync failed: %s",e)
+   sy=1
+  if Oi==0 or Oi==123456789012345678:logger.warning("⚠ OWNER_ID is placeholder; DMs disabled.")
+  if not gs:gs=1;t1=asyncio.create_task(_gdl());t1.add_done_callback(_tdc);asyncio.create_task(_srgdm())
+  if not cs:cs=1;t=b.loop.create_task(_csl());t.add_done_callback(_tdc)
+ except:logger.error("on_ready error:\n%s",traceback.format_exc())
+@b.event
+async def on_message(m):
+ try:
+  if m.author==b.user:return
+  if m.content.strip()=="!sync":
+   try:synced=await tr.sync();await m.channel.send(f"Synced {len(synced)} commands.")
+   except Exception as e:await m.channel.send(f"Sync failed: {e}")
+  if b.user in m.mentions:logger.info("[MENTION] %s: %s",m.author,m.content)
+ except:pass
+
+# ═══ CONSOLE ═══
+async def _csl():
+ global pf,ar,lm,lp,ce,re,dr,al,pl,pp
+ await b.wait_until_ready()
+ print("\n"+"="*50+"\nCONSOLE READY — !help for commands\n"+"="*50+"\n")
+ while not b.is_closed():
+  try:
+   if select.select([sys.stdin],[],[],0.5)[0]:
+    loop=asyncio.get_running_loop();cmd=await loop.run_in_executor(None,sys.stdin.readline)
+    if not cmd:break
+    cmd=cmd.strip()
+   else:await asyncio.sleep(0.1);continue
+  except(EOFError,KeyboardInterrupt):break
+  except RuntimeError:return
+  except:continue
+  if not cmd:continue
+  if cmd=="!help":print("!help|!reply <text>|!auto on/off|!chatsys on/off|!rating on/off|!reason <text>|!autolock on/off|!panic|!panic clear|!enableall|!savehistory|!exit|!restart")
+  elif cmd=="!panic":pl=1;pp=dr;dr="Panic button pressed.";ce=re=0;print("🚨 PANIC.");await _ed("🚨 PANIC pressed.",level="critical")
+  elif cmd in("!panic clear","!liftpanic"):pl=0;dr=pp;ce=re=1;print("✔ Panic lifted.")
+  elif cmd=="!enableall":ce=re=1;pl=0;dr="maintenance";print("✔ All enabled.")
+  elif cmd=="!savehistory":
+   os.makedirs(Ld,exist_ok=1);ts=time.strftime("%Y%m%d_%H%M%S");fnm=os.path.join(Ld,f"chatlog_{ts}.json")
+   try:json.dump(list(clg),open(fnm,"w",encoding="utf-8"),indent=2,ensure_ascii=0);print(f"✔ Saved {len(clg)} entries")
+   except Exception as e:print(f"✖ Save failed: {e}")
+  elif cmd.startswith("!chatsys"):
+   ps=cmd.split()
+   if len(ps)==1:print(f"Chat: {'ON'if ce else'OFF'}{' (panic locked)'if pl else''}")
+   elif ps[1]=="on":
+    if pl:print("❌ Panic lock active.")
+    else:ce=1;print("✔ Chat ENABLED.")
+   elif ps[1]=="off":ce=0;print("✔ Chat DISABLED.")
+  elif cmd.startswith("!rating"):
+   ps=cmd.split()
+   if len(ps)==1:print(f"Rating: {'ON'if re else'OFF'}{' (panic locked)'if pl else''}")
+   elif ps[1]=="on":
+    if pl:print("❌ Panic lock active.")
+    else:re=1;print("✔ Rating ENABLED.")
+   elif ps[1]=="off":re=0;print("✔ Rating DISABLED.")
+  elif cmd.startswith("!reason "):nr=cmd[8:].strip();dr=nr;print(f"✔ Reason: {dr}")if nr else None
+  elif cmd.startswith("!autolock"):
+   ps=cmd.split()
+   if len(ps)==1:print(f"Auto‑lock: {'ON'if al else'OFF'}")
+   elif ps[1]=="on":al=1;print("✔ Auto‑lock ENABLED.")
+   elif ps[1]=="off":al=0;print("✔ Auto‑lock DISABLED.")
+  elif cmd.startswith("!reply "):
+   txt=cmd[7:].strip()
+   if not txt:print("[ERROR] Empty.");continue
+   async with flk:
+    if pf is None:print("[ERROR] No interaction.");continue
+    hook=pf;msg=lm;prev=lp
+   try:
+    await hook.send(content=txt);print(f"[OK] Reply: {txt}")
+    if msg:
+     async with llk:tag=cb._lrn(msg,txt)
+     if tag:print(f"[LEARN] '{msg[:50]}'")
+     if prev:
+      async with llk:ctx=cb._lcx(prev,msg,txt)
+      if ctx:print(f"[CTX] Learned.")
+    async with flk:pf=None;lm=None;lp=None
+   except(discord.NotFound,discord.Forbidden):print("[ERROR] Expired.");async with flk:pf=None;lm=None;lp=None
+   except Exception as e:print(f"[ERROR] {e}")
+  elif cmd.startswith("!auto"):
+   ps=cmd.split()
+   if len(ps)==1 or ps[1]=="status":print(f"Auto‑reply: {'ON'if ar else'OFF'}")
+   elif ps[1]=="on":ar=1;print("✔ Auto‑reply ON.")
+   elif ps[1]=="off":ar=0;print("✔ Auto‑reply OFF.")
+  elif cmd=="!exit":print("Shutting down...");await b.close();return
+  elif cmd=="!restart":print("Restarting...");await b.close();return
+  else:print(f"Unknown: {cmd}. !help.")
+
+# ═══ RUN ═══
+def run_bot():
+ loop=asyncio.new_event_loop();loop.set_exception_handler(_aeh);asyncio.set_event_loop(loop)
+ global g,l
+ g=_lg();l=_ll()
+ attempts=0;rd=Id;df=0;fa=1
+ while attempts<Mr:
+  df=0;rd=Id
+  try:
+   if not fa:
+    try:b.clear()
+    except:pass
+   fa=0
+   logger.info("▶ Starting bot (attempt %d/%d)...",attempts+1,Mr)
+   b.run(Tk)
+   logger.info("✔ Bot shut down.");return
+  except SystemExit as e:
+   if e.code==42:logger.info("🔄 Manual restart.");df=0;rd=Id;continue
+   raise
+  except discord.LoginFailure:logger.critical("✖ Invalid token.");return
+  except discord.PrivilegedIntentsRequired:logger.critical("✖ Missing intents.");return
+  except(KeyboardInterrupt,SystemExit):logger.info("✔ Shutdown.");return
+  except Exception as e:
+   err=str(e).lower()
+   if"dns"in err or"no address"in err:
+    df+=1
+    if df>Md:logger.critical("✖ Too many DNS failures.");return
+    wait=min(10*df,60);logger.warning("🌐 DNS failure (%d/%d). Wait %ds...",df,Md,wait);time.sleep(wait);continue
+   if"session is closed"in err:logger.info("🔄 Session expired.");try:b.clear();except:pass;time.sleep(2);continue
+   if"rate limit"in err or"429"in err:wait=min(rd*2,120);logger.warning("⏳ Rate limit. Wait %ds.",wait);time.sleep(wait);rd=min(rd*2,60);continue
+   if"connection"in err:logger.warning("🔌 Connection lost. Wait %ds.",rd);time.sleep(rd);rd=min(rd*2,60);continue
+   logger.error("💥 Crash (attempt %d): %s",attempts+1,e);attempts+=1
+   if attempts<Mr:
+    logger.info("⏳ Restart in %ds...",rd);time.sleep(rd);rd=min(rd*2,60)
+    try:
+     pending=asyncio.all_tasks(loop)
+     for t in pending:t.cancel()
+     loop.run_until_complete(asyncio.sleep(0.3));loop.close()
+    except:pass
+    loop=asyncio.new_event_loop();loop.set_exception_handler(_aeh);asyncio.set_event_loop(loop)
+   else:logger.critical("✖ Max restarts.");return
+if __name__=="__main__":
+ cb=_Cb()
+ logger.info("✔ Chatbot: %d intents, %d context.",len(cb.p),len(cb.cp))
+ _lf()
+ if not Tk or Tk=="YOUR_BOT_TOKEN_HERE":logger.critical("✖ Set TOKEN.");sys.exit(1)
+ run_bot()

@@ -1,0 +1,2411 @@
+# work in progress full uncompressed version.
+# restart error (doesn't work, security issue.)
+
+
+"""
+Discord Bot — Pattern‑Matching Chatbot + Math + Rating + Context + Grudges + Leveling + Server Management
+- Slash: /chat, /profile, /lyrics, /badapple, /support, /settings, /help, /leaderboard, /rank, /xpleaderboard
+- Server Management: /purge, /say, /announce, /lock, /unlock, /slowmode, /nickname, /warn, /avatar, /role, /serverinfo, /roleinfo, /setup
+- Console: !reply, !auto, !chatsys, !rating, !reason, !autolock, !panic, !enableall, !exit, !restart
+- Fully snark‑infused, multi‑server ready, all configurable at the top
+======================================================================
+QUICK CONFIGURATION – all customizable values are in this section
+======================================================================
+"""
+
+import asyncio, hashlib, json, logging, math, os, random, re, select, socket, sys, time, traceback, warnings
+from collections import deque
+from typing import Optional, List, Tuple, Dict
+
+import discord
+from discord import app_commands
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. BOT IDENTITY
+# ═══════════════════════════════════════════════════════════════════════
+TOKEN            = "YOUR_BOT_TOKEN_HERE"
+OWNER_ID         = 123456789012345678
+BASE_DIR         = "/storage/emulated/0/SLM_test"
+INTENTS_FILE     = os.path.join(BASE_DIR, "data.json")
+CONTEXT_FILE     = os.path.join(BASE_DIR, "context.json")
+FILTER_FILE      = os.path.join(BASE_DIR, "filter.json")
+GRUDGES_FILE     = os.path.join(BASE_DIR, "grudges.json")
+LEVELS_FILE      = os.path.join(BASE_DIR, "levels.json")
+LOGS_DIR         = os.path.join(BASE_DIR, "logs")
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. SLASH‑COMMAND NAMES & DESCRIPTIONS – tweak them here!
+# ═══════════════════════════════════════════════════════════════════════
+CMD_CHAT_NAME      = "chat"
+CMD_CHAT_DESC      = "Talk to the pattern‑matching chatbot (public)"
+CMD_PROFILE_NAME   = "profile"
+CMD_PROFILE_DESC   = "View a user's profile information"
+CMD_LYRICS_NAME    = "lyrics"
+CMD_LYRICS_DESC    = "Find a song by lyrics, title, or artist"
+CMD_BADAPPLE_NAME  = "badapple"
+CMD_BADAPPLE_DESC  = "Rule 86: Bad Apple exists on everything."
+CMD_SUPPORT_NAME   = "support"
+CMD_SUPPORT_DESC   = "Links and information for this bot"
+CMD_SETTINGS_NAME  = "settings"
+CMD_SETTINGS_DESC  = "Toggle grudge DMs or other bot settings"
+CMD_RANK_NAME      = "rank"
+CMD_RANK_DESC      = "Check your level and XP (or someone else's)"
+CMD_LEADERBOARD_NAME = "leaderboard"
+CMD_LEADERBOARD_DESC = "Hall of Shame – see the worst grudge scores"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. SUPPORT EMBED CUSTOMIZATION
+# ═══════════════════════════════════════════════════════════════════════
+SUPPORT_EMBED_TITLE     = "🛟 Support & Credits"
+SUPPORT_EMBED_DESC      = "Here's where you can find help, report issues, or just say hi."
+SUPPORT_EMBED_COLOR     = 0x5865F2
+SUPPORT_EMBED_FOOTER    = "Thank you for using the bot!"
+SUPPORT_EMBED_THUMBNAIL = ""
+
+SUPPORT_FIELDS = [
+    {"name":"📢 Official Server","value":"[Join the Discord](https://discord.gg/yourserver)","inline":False},
+    {"name":"🐞 Report a Bug","value":"DM <@YOUR_DISCORD_ID> or use `/chat` fallback.","inline":False},
+    {"name":"📖 Credits","value":"Built with ❤️ using **discord.py** and **scikit‑learn**. Touhou © ZUN.","inline":False},
+]
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4. CONTENT FILTER & AUTO‑LOCKDOWN
+# ═══════════════════════════════════════════════════════════════════════
+BLOCKED_WORDS_FALLBACK = ["nsfw_word1", "nsfw_word2"]
+MAINTENANCE_CAT_GIFS = ["https://cataas.com/cat/gif","https://cataas.com/cat/says/repairing"]
+BAD_APPLE_GIF_URL = "https://media1.tenor.com/m/21209263/tenor.gif"
+AUTO_LOCK_THRESHOLD = 3
+AUTO_LOCK_WINDOW    = 10.0
+
+# ═══════════════════════════════════════════════════════════════════════
+# 5. TF‑IDF THRESHOLDS
+# ═══════════════════════════════════════════════════════════════════════
+CONFIDENCE_THRESHOLD       = 0.35
+FILTER_CONFIDENCE_THRESHOLD = 0.65
+
+# ═══════════════════════════════════════════════════════════════════════
+# 6. RESTART BEHAVIOUR
+# ═══════════════════════════════════════════════════════════════════════
+MAX_RESTARTS     = 10
+INITIAL_DELAY    = 5
+MAX_DNS_FAILURES = 10
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. GRUDGE SYSTEM CONFIG
+# ═══════════════════════════════════════════════════════════════════════
+GRUDGE_DECAY_INTERVAL   = 6 * 3600
+GRUDGE_DECAY_AMOUNT     = 1
+GRUDGE_RANDOM_MSG_CHANCE = 0.02
+GENERAL_CHANNEL_NAMES   = [
+    "general", "general-chat", "general_chat", "main-chat", "main_chat",
+    "chat", "lounge", "off-topic", "random", "bar", "pub", "tavern",
+    "commons", "hall", "lobby", "general-channel", "generalchannel"
+]
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. LEVELING SYSTEM CONFIG
+# ═══════════════════════════════════════════════════════════════════════
+LEVELING_ENABLED = True
+XP_MIN = 15
+XP_MAX = 25
+XP_COOLDOWN = 60
+LEVEL_UP_CHANNEL = None
+LEVELS_PER_PAGE = 10
+
+def level_from_xp(xp: int) -> int:
+    return int(math.sqrt(xp / 100))
+
+def xp_for_next_level(level: int) -> int:
+    return (level + 1) ** 2 * 100
+
+# ═══════════════════════════════════════════════════════════════════════
+# 9. SETUP GUIDE CUSTOMIZATION (change links here)
+# ═══════════════════════════════════════════════════════════════════════
+SETUP_INVITE_LINK = "https://discord.com/oauth2/authorize?client_id=your_client_id&permissions=8&scope=bot+applications.commands"
+SETUP_FOOTER = "The bot runs on a phone. If it goes offline, blame the owner's battery."
+
+# ═══════════════════════════════════════════════════════════════════════
+# DNS RETRY PATCH
+# ═══════════════════════════════════════════════════════════════════════
+_orig_getaddrinfo = socket.getaddrinfo
+def _patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    try: return _orig_getaddrinfo(host, port, family, type, proto, flags)
+    except socket.gaierror:
+        time.sleep(2)
+        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+socket.getaddrinfo = _patched_getaddrinfo
+
+# ═══════════════════════════════════════════════════════════════════════
+# LOGGING & SEVERITY
+# ═══════════════════════════════════════════════════════════════════════
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+logger = logging.getLogger(__name__)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
+logging.getLogger("discord.http").setLevel(logging.WARNING)
+logging.getLogger("discord.gateway").setLevel(logging.WARNING)
+
+SEVERITY = {
+    "minor":{"title":"ℹ️ Bot Notice","color":0x57F287},
+    "warning":{"title":"⚠️ Bot Warning","color":0xFEE75C},
+    "error":{"title":"🛑 Bot Error","color":0xFF4500},
+    "critical":{"title":"🚨 Critical Error","color":0xED4245},
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# CONTENT FILTER ENGINE (TF‑IDF + fallback)
+# ═══════════════════════════════════════════════════════════════════════
+_filter_patterns = []
+_filter_tags = []
+_filter_vectorizer = None
+_filter_vectors = None
+_filter_loaded = False
+
+def load_filter():
+    global _filter_patterns, _filter_tags, _filter_vectorizer, _filter_vectors, _filter_loaded
+    if not os.path.exists(FILTER_FILE):
+        os.makedirs(BASE_DIR, exist_ok=True)
+        starter = {"intents":[
+            {"tag":"fuck","patterns":["fuck","f*ck","f**k","f***","fck","fuuck","fuuuck","fuk","fukk","f4ck","f0ck","f u c k","f.ck","f*ck","eff you see kay","fack","phuck","phuk","f***ing","fk","fkn","fckn","fkin","f***in","f-ing","fucking","f u c k i n g"]},
+            {"tag":"shit","patterns":["shit","sh*t","sh1t","sh!t","sht","shitt","shiiiit","shite","shyte","s h i t","sh.it","$hit","$h*t","5hit","sh1t","s,h,i,t","s-h-i-t","s.h.i.t"]},
+            {"tag":"ass","patterns":["ass","a$$","a**","azz","a s s","arse","@ss","a55","4ss"]},
+            {"tag":"bitch","patterns":["bitch","b*tch","b!tch","b1tch","biatch","beyotch","b i t c h","b17ch","b1tch","beotch"]},
+            {"tag":"nigger","patterns":["nigger","n*gger","n!gger","n1gger","nigg3r","n1gg3r","nigga","n*gga","n!gga","n1gga","nigg@","n i g g e r","n i g g a","nibba","n1bb4","nibb@"]},
+            {"tag":"retard","patterns":["retard","r*tard","r3tard","ret4rd","r3t4rd","ret@rd","r e t a r d","retrd","rtard","ritard"]}
+        ]}
+        with open(FILTER_FILE,"w",encoding="utf-8") as f: json.dump(starter,f,indent=2,ensure_ascii=False)
+    try:
+        with open(FILTER_FILE,"r",encoding="utf-8") as f: data = json.load(f)
+    except Exception:
+        logger.warning("filter.json corrupted – using exact‑word fallback")
+        _filter_loaded = True; return
+    _filter_patterns.clear(); _filter_tags.clear()
+    for intent in data.get("intents",[]):
+        for p in intent.get("patterns",[]):
+            _filter_patterns.append(p.lower().strip())
+            _filter_tags.append(intent["tag"])
+    if not _filter_patterns:
+        logger.warning("Empty filter patterns – using exact‑word fallback")
+        _filter_loaded = True; return
+    try:
+        _filter_vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3,6))
+        _filter_vectors = _filter_vectorizer.fit_transform(_filter_patterns)
+        _filter_loaded = True
+        logger.info("Filter model trained with %d patterns", len(_filter_patterns))
+    except Exception as e:
+        logger.error("Filter training failed: %s", e)
+        _filter_loaded = True
+
+_BLOCKED_PATTERNS_FALLBACK = [
+    re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+    for word in BLOCKED_WORDS_FALLBACK
+]
+
+_FILTER_WHITELIST = {
+    "assistance", "class", "pass", "grass", "mass", "assist",
+    "trigger", "triggers", "trig", "try", "trick", "track",
+    "shift", "sh*t", "shin", "shy", "sheet", "shoot"
+}
+
+_filter_lock = asyncio.Lock()
+
+def _filter_text(text):
+    if not _filter_loaded: load_filter()
+    
+    if _filter_vectorizer is None or _filter_vectors is None or not _filter_patterns:
+        for pat in _BLOCKED_PATTERNS_FALLBACK:
+            text = pat.sub("[Filtered]", text)
+        return text
+
+    lines = text.splitlines(keepends=True)
+    filtered_lines = []
+    max_pattern_len = max(len(p) for p in _filter_patterns)
+
+    for line in lines:
+        line_text = line.rstrip('\n\r') if line.endswith(('\n','\r')) else line
+        words = line_text.split()
+        filtered_words = []
+        
+        for word in words:
+            cleaned = re.sub(r'[^\w]|_', '', word.lower().strip())
+            if len(cleaned) <= 1 or cleaned in _FILTER_WHITELIST:
+                filtered_words.append(word)
+                continue
+            try:
+                vec = _filter_vectorizer.transform([cleaned])
+                sims = cosine_similarity(vec, _filter_vectors)
+                if sims.size > 0 and sims.shape[1] > 0:
+                    confidence = float(sims[0][sims.argmax()])
+                    if confidence >= FILTER_CONFIDENCE_THRESHOLD:
+                        if len(cleaned) <= max_pattern_len:
+                            filtered_words.append("[Filtered]")
+                            continue
+            except Exception: pass
+            filtered_words.append(word)
+        
+        rebuilt = " ".join(filtered_words)
+        if line.endswith('\n'):
+            rebuilt += '\n'
+        elif line.endswith('\r'):
+            rebuilt += '\r'
+        filtered_lines.append(rebuilt)
+
+    return "".join(filtered_lines)
+
+_filter_events = deque(maxlen=200)
+_auto_lock_enabled = True
+_chat_enabled = True
+_rating_enabled = True
+_disable_reason = "maintenance"
+_panic_locked = False
+_panic_prev_reason = ""
+_chat_log = deque(maxlen=5000)
+
+async def _apply_auto_lockdown(user_id):
+    global _chat_enabled, _disable_reason
+    if not _auto_lock_enabled: return
+    now = time.time()
+    async with _filter_lock:
+        while _filter_events and _filter_events[0][0] < now - AUTO_LOCK_WINDOW:
+            _filter_events.popleft()
+        users = {uid for _, uid in _filter_events}
+        if len(users) >= AUTO_LOCK_THRESHOLD:
+            _chat_enabled = False
+            _disable_reason = "Auto‑lockdown: multiple filtered messages"
+            logger.warning("Auto‑lockdown: %d users in %ds", len(users), AUTO_LOCK_WINDOW)
+            await send_error_dm(f"Chat disabled by auto‑lockdown ({len(users)} users)", level="warning")
+
+# ═══════════════════════════════════════════════════════════════════════
+# MATH ENGINE (safe eval, word‑to‑number, operators) – hardened
+# ═══════════════════════════════════════════════════════════════════════
+_SAFE_MATH_NAMES = {
+    "abs":abs,"round":round,"min":min,"max":max,
+    "sqrt":math.sqrt,"sin":math.sin,"cos":math.cos,
+    "tan":math.tan,"asin":math.asin,"acos":math.acos,
+    "atan":math.atan,"atan2":math.atan2,"log":math.log,
+    "log10":math.log10,"log2":math.log2,"exp":math.exp,
+    "pow":math.pow,"pi":math.pi,"e":math.e,
+    "tau":math.tau,"inf":math.inf,"nan":math.nan,
+    "ceil":math.ceil,"floor":math.floor,"degrees":math.degrees,
+    "radians":math.radians,"gcd":math.gcd,"lcm":math.lcm,
+}
+
+_EVAL_BLOCKLIST_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
+    r'__', r'\.\s*__', r'\(\)', r'"', r"'", r'\bclass\b', r'\bbase\b',
+    r'\bsubclass\b', r'\bmro\b', r'\bimport\b', r'\bexec\b', r'\bopen\b',
+    r'\bfile\b', r'\bglobals\b', r'\blocals\b', r'\bgetattr\b', r'\bsetattr\b',
+    r'\bdelattr\b', r'\bbuiltins\b', r'\bfrozen\b', r'\bos\.', r'\bsystem\b',
+    r'\bpopen\b', r'\bf_back\b', r'\bf_code\b', r'\btb_frame\b', r'\btraceback\b',
+    r'\baudit\b', r'\bhook\b', r'\bcodec\b', r'\bencode\b', r'\bdecode\b',
+    r'\brunpy\b', r'\brunp\b', r'\brun\s*\_', r'\bimportlib\b',
+]]
+
+_VALID_MATH_RE = re.compile(r'^[a-zA-Z0-9\s+*/^%!().,\-]+$')
+
+_WORD_NUMBERS = {
+    "zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,
+    "ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,"sixteen":16,"seventeen":17,
+    "eighteen":18,"nineteen":19,"twenty":20,"thirty":30,"forty":40,"fifty":50,"sixty":60,"seventy":70,
+    "eighty":80,"ninety":90,"hundred":100,"thousand":1000,"million":1000000,"billion":1000000000,
+}
+
+_WORD_OPERATORS = {
+    "plus":r'\bplus\b', "added to":r'\badded\s+to\b', "add":r'\badd\b',
+    "minus":r'\bminus\b', "subtract":r'\bsubtract\b', "subtracted from":r'\bsubtracted\s+from\b',
+    "less":r'\bless\b', "take away":r'\btake\s+away\b',
+    "times":r'\btimes\b', "multiplied by":r'\bmultiplied\s+by\b', "multiply":r'\bmultiply\b',
+    "divided by":r'\bdivided\s+by\b', "divide":r'\bdivide\b', "over":r'\bover\b',
+    "to the power of":r'\bto\s+the\s+power\s+of\b', "raised to":r'\braised\s+to\b',
+    "modulo":r'\bmodulo\b', "mod":r'\bmod\b', "remainder of":r'\brest\s+of\b',
+    "squared":r'\bsquared\b', "cubed":r'\bcubed\b',
+    "square root of":r'\bsquare\s+root\s+of\b', "the square root of":r'\bthe\s+square\s+root\s+of\b',
+    "cube root of":r'\bcube\s+root\s+of\b',
+}
+
+_OP_SYMBOLS = {
+    "plus":"+","added to":"+","add":"+",
+    "minus":"-","subtract":"-","subtracted from":"-","less":"-","take away":"-",
+    "times":"*","multiplied by":"*","multiply":"*",
+    "divided by":"/","divide":"/","over":"/",
+    "to the power of":"**","raised to":"**",
+    "modulo":"%","mod":"%","remainder of":"%",
+    "squared":"**2","cubed":"**3",
+    "square root of":"sqrt(","the square root of":"sqrt(",
+    "cube root of":"cbrt(",
+}
+
+_WORD_CONSTANTS = {"pi":"pi","e":"e","tau":"tau","infinity":"inf","inf":"inf"}
+
+def _words_to_number(text):
+    text = text.lower().strip()
+    text = re.sub(r'\ba\b', '', text).replace(" and ", " ")
+    text = re.sub(r'[!?.,;:]+$', '', text)
+    words = text.split()
+    if not words: return text
+    total = current = 0
+    for word in words:
+        if word in _WORD_NUMBERS:
+            val = _WORD_NUMBERS[word]
+            if val >= 1000:
+                if current == 0: current = 1
+                current *= val; total += current; current = 0
+            elif val >= 100:
+                if current == 0: current = 1
+                current *= val
+            else: current += val
+        else: return text
+    total += current
+    return str(total) if total != 0 else text
+
+def _sanitize_for_eval(expr):
+    for pat in _EVAL_BLOCKLIST_PATTERNS:
+        if pat.search(expr): return None
+    if not _VALID_MATH_RE.match(expr): return None
+    if len(expr) > 200: return None
+    return expr
+
+_NUM_WORD_RE = re.compile(r'(?:(?:'+'|'.join(re.escape(w) for w in _WORD_NUMBERS)+r')\s*)+')
+
+def _replace_word_operators(expression):
+    try:
+        expr = expression.lower().strip()
+        for word, const in sorted(_WORD_CONSTANTS.items(), key=lambda x:-len(x[0])):
+            expr = expr.replace(word, const)
+        sorted_ops = sorted(_WORD_OPERATORS.items(), key=lambda x:-len(x[0]))
+        for phrase, pattern in sorted_ops:
+            symbol = _OP_SYMBOLS.get(phrase, "")
+            if not symbol: continue
+            if symbol in ("**2","**3"):
+                expr = re.sub(r'(\d+|\))\s*' + pattern, r'\1' + symbol, expr)
+            elif symbol in ("sqrt(","cbrt("):
+                expr = re.sub(pattern + r'\s*(\d+(?:\.\d+)?|\([^)]+\))',
+                              lambda m, s=symbol: s + m.group(1) + ")", expr)
+            else:
+                expr = re.sub(pattern, f" {symbol} ", expr)
+        expr = _NUM_WORD_RE.sub(lambda m: _words_to_number(m.group(0)), expr)
+        expr = re.sub(r'\s+',' ',expr).strip()
+        expr = re.sub(r'^(what is|whats|what\'s|calculate|solve|compute|evaluate|find|tell me|how much is)\s*','',expr,flags=re.IGNORECASE)
+        expr = expr.rstrip('?=').strip()
+        return expr
+    except Exception: return expression
+
+def _is_math_expression(text):
+    if not text: return False
+    stripped = text.strip().lower()
+    has_sym = bool(re.search(r'[+\-*/^%!()]|//|\*\*', stripped))
+    has_word = any(re.search(p, stripped) for p in _WORD_OPERATORS.values())
+    has_digit = bool(re.search(r'[0-9]', stripped))
+    has_word_num = any(w in stripped.split() for w in _WORD_NUMBERS)
+    has_const = any(c in stripped.split() for c in _WORD_CONSTANTS)
+    has_number = has_digit or has_word_num or has_const
+    is_simple = bool(re.match(r'^[0-9]*\.?[0-9]+$', stripped))
+    if is_simple and not (has_sym or has_word): return False
+    return has_number and (has_sym or has_word)
+
+def solve_single(expression):
+    expr = _replace_word_operators(expression).strip().replace("^","**")
+    expr = re.sub(r'cbrt\(([^)]+)\)', r'(\1)**(1/3)', expr)
+    expr = _sanitize_for_eval(expr)
+    if expr is None: return None
+    try:
+        safe_dict = {"__builtins__":{}}
+        safe_dict.update(_SAFE_MATH_NAMES)
+        result = eval(expr, safe_dict)
+        if isinstance(result,(int,float)):
+            if isinstance(result,float) and result == int(result): result = int(result)
+            if isinstance(result,float): result = round(result,10)
+            return str(result)
+        return str(result)
+    except (SyntaxError,TypeError,ValueError,ZeroDivisionError,OverflowError,MemoryError,RecursionError): return None
+    except Exception: return None
+
+def _split_equations(text):
+    parts, current, depth = [], [], 0
+    for char in text:
+        if char in '([{': depth += 1
+        elif char in ')]}': depth = max(0,depth-1)
+        elif char in ',;' and depth == 0:
+            parts.append(''.join(current).strip()); current = []; continue
+        current.append(char)
+    if current: parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+def solve_multi(message):
+    parts = _split_equations(message)
+    if not parts: return None
+    results = []
+    for p in parts:
+        if not _is_math_expression(p): return None
+        ans = solve_single(p)
+        if ans is None: return None
+        results.append((p,ans))
+    return results
+
+_SIMPLE_CONSTANTS = {'pi','e','tau','inf','nan'}
+
+def _is_complex(expr):
+    cleaned = re.sub(r'[0-9+\-*/^%!()\[\]\s.]', '', expr.lower().strip())
+    return bool(set(re.findall(r'[a-zA-Z_]+', cleaned)) - _SIMPLE_CONSTANTS)
+
+# ═══════════════════════════════════════════════════════════════════════
+# MATH RESPONSE TEMPLATES
+# ═══════════════════════════════════════════════════════════════════════
+_SIMPLE_SINGLE_TEMPLATES = [
+    "The answer to {expr} is {ans}.","{expr} = {ans}.","Easy! {expr} equals {ans}.",
+    "Calculating... {expr} results in {ans}.","If you do {expr}, you get {ans}.",
+    "It's simple: {expr} → {ans}.","I computed {expr} and got {ans}.",
+    "Result: {expr} = {ans}.","{expr} gives us {ans}.","No sweat! {expr} is {ans}.",
+    "After doing the math, {expr} = {ans}.","For {expr}, the answer is {ans}.",
+    "That's straightforward: {expr} = {ans}.","The result of {expr} is {ans}.",
+    "Let's see... {expr} = {ans}.","I solved {expr} and the answer is {ans}.",
+    "Quick math: {expr} = {ans}.","Here you go: {expr} = {ans}.",
+    "The magic number from {expr} is {ans}.","Done! {expr} equals {ans}.",
+]
+_SIMPLE_MULTI_HEADERS = [
+    "Here are the answers:","Let's solve these:","You asked for these:",
+    "Calculating all:","Here we go:","Multiple solutions:","Check it out:",
+    "All done:","Here's what I got:","Results:","Solving the set:","Behold:",
+    "Ta-da:","Simple batch:","All calculations:","I solved them:","Your results:",
+    "Here you are:","Answers below:","Quick batch:","Maths resolved:",
+]
+_SIMPLE_MULTI_ITEM_FORMATS = [
+    "{expr} = {ans}","{expr} → {ans}","{expr} gives {ans}","{expr} equals {ans}",
+    "for {expr} we get {ans}","{expr} results in {ans}","{expr} -> {ans}",
+    "{expr} yields {ans}","{expr} produces {ans}","{expr} is {ans}",
+]
+_SIMPLE_MULTI_JOINERS = [", ","; "," and "," then "," also "," plus "," along with "," together with "]
+
+def _format_multiple_simple(eqs):
+    h = random.choice(_SIMPLE_MULTI_HEADERS)
+    items = [random.choice(_SIMPLE_MULTI_ITEM_FORMATS).format(expr=e,ans=a) for e,a in eqs]
+    return f"{h} {random.choice(_SIMPLE_MULTI_JOINERS).join(items)}"
+
+_COMPLEX_SINGLE_TEMPLATES = [
+    "Evaluating {expr}, the result is {ans}.","When we compute {expr}, we obtain {ans}.",
+    "The value of {expr} is {ans}.","After careful calculation, {expr} = {ans}.",
+    "I determined that {expr} equals {ans}.","The expression {expr} evaluates to {ans}.",
+    "We find that {expr} → {ans}.","Solving {expr} gives us {ans}.",
+    "I've calculated {expr} and the answer is {ans}.","Upon evaluating {expr}, we get {ans}.",
+    "The result of the expression {expr} is {ans}.","For {expr}, the computed answer is {ans}.",
+    "It turns out {expr} = {ans}.","That expression simplifies to {ans}.",
+    "The computation yields {ans} for {expr}.","I resolved {expr} and got {ans}.",
+    "With some math, {expr} = {ans}.","The evaluation of {expr} comes out to {ans}.",
+    "Working out {expr}, we arrive at {ans}.","Here's the result: {expr} = {ans}.",
+]
+_COMPLEX_MULTI_HEADERS = [
+    "Let me work through these:","Here are the results:","Complex calculations completed:",
+    "Solving the following:","Here's what I found:","Evaluating each:","Multi-step results:",
+    "I computed the expressions and got:","For these problems, here are the answers:",
+    "Expressions evaluated:","Maths solved:","Here you go — advanced edition:",
+    "After some heavy lifting:","Results of the complex batch:","All solved:",
+    "The evaluations are in:","Look at these results:","Your advanced math solutions:",
+    "Carefully computed:","Done with the difficult ones:","Here's the breakdown:",
+]
+_COMPLEX_MULTI_ITEM_FORMATS = [
+    "evaluating {expr} gives {ans}","the value of {expr} is {ans}","{expr} simplifies to {ans}",
+    "{expr} evaluates to {ans}","{expr} results in {ans}","computing {expr} yields {ans}",
+    "{expr} -> {ans}","for {expr}, the answer is {ans}","{expr} equals {ans} after evaluation",
+    "working on {expr} leads to {ans}",
+]
+_COMPLEX_MULTI_JOINERS = [", ","; "," and "," then "," also "," plus "," along with ",
+                          " together with "," further, "," moreover, "," additionally, "]
+
+def _format_multiple_complex(eqs):
+    h = random.choice(_COMPLEX_MULTI_HEADERS)
+    items = [random.choice(_COMPLEX_MULTI_ITEM_FORMATS).format(expr=e,ans=a) for e,a in eqs]
+    return f"{h} {random.choice(_COMPLEX_MULTI_JOINERS).join(items)}"
+
+_MIXED_MULTI_HEADERS = [
+    "Here are the answers to your mixed set:","Some were simple, some needed more work — here's everything:",
+    "Let's go through the batch:","Mixed bag results:","Simple and complex solved:",
+    "I worked out the whole list:","Your mixed equations resolved:","A blend of easy and advanced:",
+    "Here are all the solutions:","All equations done:","Both straightforward and tricky ones:",
+    "I solved the simple and the advanced ones:","Here's the set, solved:","Your math batch completed:",
+    "From easy to challenging, all done:","Here's what I got for the collection:",
+    "I've computed every single one:","All answers for your mixed bunch:",
+    "Here are your results — plain and fancy:","I solved the whole mixed set:",
+    "Every equation, simple or not:","Here's the answer to each problem:",
+    "From basic to complex, all solved:","Here is the evaluation of your math:",
+    "All mixed equations solved:",
+]
+_MIXED_MULTI_ITEM_FORMATS = [
+    "{expr} = {ans}","{expr} → {ans}","{expr} gives {ans}","the value of {expr} is {ans}",
+    "{expr} simplifies to {ans}","{expr} equals {ans}","for {expr} we get {ans}",
+    "{expr} yields {ans}","{expr} -> {ans}","solving {expr} leads to {ans}",
+]
+_MIXED_MULTI_JOINERS = [", ","; "," and "," then "," also "," plus ",
+                        " along with "," together with "," further, "," moreover, "]
+
+def _format_multiple_mixed(eqs):
+    h = random.choice(_MIXED_MULTI_HEADERS)
+    items = [random.choice(_MIXED_MULTI_ITEM_FORMATS).format(expr=e,ans=a) for e,a in eqs]
+    return f"{h} {random.choice(_MIXED_MULTI_JOINERS).join(items)}"
+
+def generate_math_response(equations):
+    sc = sum(not _is_complex(e) for e,_ in equations)
+    cc = len(equations) - sc
+    if len(equations) == 1:
+        t = random.choice(_COMPLEX_SINGLE_TEMPLATES if cc else _SIMPLE_SINGLE_TEMPLATES)
+        reply = t.format(expr=equations[0][0], ans=equations[0][1])
+    elif cc == 0: reply = _format_multiple_simple(equations)
+    elif sc == 0: reply = _format_multiple_complex(equations)
+    else: reply = _format_multiple_mixed(equations)
+    if len(reply) > 1950:
+        reply = reply[:1950]
+        ls = reply.rfind(' ')
+        if ls > 1900:
+            reply = reply[:ls] + "..."
+        else:
+            reply = reply[:1947] + "..."
+    return reply
+
+# ═══════════════════════════════════════════════════════════════════════
+# PATTERN‑MATCHING CHATBOT
+# ═══════════════════════════════════════════════════════════════════════
+def clean_text(text):
+    return re.sub(r"[^a-z0-9\s\|]", "", text.lower()).strip()
+
+class Chatbot:
+    def __init__(self):
+        self.data={}; self.patterns=[]; self.tags=[]; self.responses={}
+        self.vectorizer=None; self.vectors=None
+        self.context_data={}; self.context_patterns=[]; self.context_tags=[]; self.context_responses={}
+        self.context_vectorizer=None; self.context_vectors=None
+        self.load_context(); self.load_intents(); self.train_context(); self.train()
+
+    def load_context(self):
+        if not os.path.exists(CONTEXT_FILE):
+            os.makedirs(BASE_DIR,exist_ok=True)
+            with open(CONTEXT_FILE,"w",encoding="utf-8") as f: json.dump({"intents":[]},f,indent=2)
+        try:
+            with open(CONTEXT_FILE,"r",encoding="utf-8") as f: self.context_data = json.load(f)
+        except Exception: self.context_data = {"intents":[]}
+        self.context_patterns.clear(); self.context_tags.clear(); self.context_responses.clear()
+        for intent in self.context_data.get("intents",[]):
+            self.context_responses[intent["tag"]] = intent.get("responses",[])
+            for p in intent.get("patterns",[]):
+                self.context_patterns.append(clean_text(p)); self.context_tags.append(intent["tag"])
+
+    def train_context(self):
+        if not self.context_patterns: self.context_vectorizer=self.context_vectors=None; return
+        try:
+            self.context_vectorizer = TfidfVectorizer()
+            self.context_vectors = self.context_vectorizer.fit_transform(self.context_patterns)
+        except Exception: self.context_vectorizer=self.context_vectors=None
+
+    def predict_context(self, combined):
+        if self.context_vectorizer is None or self.context_vectors is None: return None,0.0
+        try:
+            vec = self.context_vectorizer.transform([clean_text(combined)])
+            sims = cosine_similarity(vec,self.context_vectors)
+            if sims.size==0 or sims.shape[0]==0 or sims.shape[1]==0: return None,0.0
+            idx = sims.argmax()
+            return self.context_tags[idx], float(sims[0][idx])
+        except Exception: return None,0.0
+
+    def load_intents(self):
+        if not os.path.exists(INTENTS_FILE):
+            os.makedirs(BASE_DIR,exist_ok=True)
+            default_intents = {
+                "intents": [
+                    {"tag": "greeting", "patterns": ["Hello","Hi","Hey","Good morning"], "responses": ["Hello!","Hi there!"]},
+                    {"tag": "badapple_trigger", "patterns": ["Rule 86: Bad Apple exists on everything.",
+                                                              "Bad Apple rule 86",
+                                                              "Rule 86 bad apple",
+                                                              "Bad apple exists on everything",
+                                                              "If it exists you can play bad apple on it"],
+                     "responses": ["badapple"]},
+                    {"tag": "bot_insult", "patterns": ["You are just a bot",
+                                                        "You're just a bot",
+                                                        "You are only a program",
+                                                        "You're just a machine",
+                                                        "Just a bot",
+                                                        "You're not real",
+                                                        "Stupid bot",
+                                                        "Dumb machine",
+                                                        "You are just an AI"],
+                     "responses": ["secret"]}
+                ]
+            }
+            with open(INTENTS_FILE,"w",encoding="utf-8") as f: json.dump(default_intents,f,indent=2)
+        try:
+            with open(INTENTS_FILE,"r",encoding="utf-8") as f: self.data = json.load(f)
+        except Exception: self.data = {"intents":[]}
+        self.patterns.clear(); self.tags.clear(); self.responses.clear()
+        for intent in self.data.get("intents",[]):
+            self.responses[intent["tag"]] = intent.get("responses",[])
+            for p in intent.get("patterns",[]):
+                self.patterns.append(clean_text(p)); self.tags.append(intent["tag"])
+
+    def train(self):
+        if not self.patterns: self.vectorizer=self.vectors=None; return
+        try:
+            self.vectorizer = TfidfVectorizer()
+            self.vectors = self.vectorizer.fit_transform(self.patterns)
+        except Exception: self.vectorizer=self.vectors=None
+
+    def predict(self, message):
+        if self.vectorizer is None or self.vectors is None: return None,0.0
+        msg = clean_text(message)
+        if not msg: return None,0.0
+        try:
+            vec = self.vectorizer.transform([msg])
+            sims = cosine_similarity(vec,self.vectors)
+            if sims.size==0 or sims.shape[0]==0 or sims.shape[1]==0: return None,0.0
+            idx = sims.argmax()
+            return self.tags[idx], float(sims[0][idx])
+        except Exception: return None,0.0
+
+    def reply(self, message, last_user_input=None):
+        if last_user_input:
+            ctx_tag, ctx_conf = self.predict_context(f"{last_user_input} || {message}")
+            if ctx_tag and ctx_conf >= CONFIDENCE_THRESHOLD:
+                resp = self.context_responses.get(ctx_tag,[])
+                if resp: return random.choice(resp), f"context:{ctx_tag}", ctx_conf
+        tag, conf = self.predict(message)
+        if tag and conf >= CONFIDENCE_THRESHOLD:
+            return random.choice(self.responses[tag]), tag, conf
+        return None, None, conf
+
+    def learn(self, user_input, correct_response):
+        try:
+            for intent in self.data.get("intents",[]):
+                if correct_response in intent.get("responses",[]):
+                    intent.setdefault("patterns",[]).append(user_input); tag = intent["tag"]; break
+            else:
+                tag = f"user_intent_{len(self.data.get('intents',[]))}"
+                self.data.setdefault("intents",[]).append({"tag":tag,"patterns":[user_input],"responses":[correct_response]})
+            with open(INTENTS_FILE,"w",encoding="utf-8") as f: json.dump(self.data,f,indent=2,ensure_ascii=False)
+            self.load_intents(); self.train()
+            return tag
+        except Exception: return None
+
+    def learn_context(self, prev_user, current_user, response):
+        try:
+            combined = f"{prev_user} || {current_user}"
+            for intent in self.context_data.get("intents",[]):
+                if response in intent.get("responses",[]):
+                    intent.setdefault("patterns",[]).append(combined); tag = intent["tag"]; break
+            else:
+                tag = f"context_intent_{len(self.context_data.get('intents',[]))}"
+                self.context_data.setdefault("intents",[]).append({"tag":tag,"patterns":[combined],"responses":[response]})
+            with open(CONTEXT_FILE,"w",encoding="utf-8") as f: json.dump(self.context_data,f,indent=2,ensure_ascii=False)
+            self.load_context(); self.train_context()
+            return tag
+        except Exception: return None
+
+# ═══════════════════════════════════════════════════════════════════════
+# RATING SYSTEM
+# ═══════════════════════════════════════════════════════════════════════
+POSITIVE_WORDS = [
+    "pro","elite","god","king","queen","legend","master","savage","star","epic",
+    "cool","awesome","fire","swag","ninja","demon","angel","hero","boss","champ",
+    "alpha","ultra","mega","gamer","winner","phoenix","dragon","wolf","tiger",
+    "shadow","storm","flash","blade","arrow","frost","thunder","nova"
+]
+NEGATIVE_WORDS = [
+    "noob","loser","trash","scum","fake","sad","bad","lame","cringe","ez",
+    "newbie","pleb","scrub","nub","dummy","fail","waste","poop","ugly","smelly",
+    "suck","hate","poor","weak","slow","broken","dead","rotten","stinky"
+]
+
+POSITIVE_ONLY_TEMPLATES = [
+    "You've got {pos_list} in your name — instant cool points.",
+    "The vibes are strong with {pos_list}, obviously.",
+    "With {pos_list} in your handle, you're clearly built different.",
+    "Your name radiates {pos_list} energy. No debate.",
+    "You're packing {pos_list} — that's a free stat boost.",
+    "I see {pos_list} and I'm already impressed.",
+    "Any name containing {pos_list} deserves extra credit.",
+    "{pos_list}? Yeah, you're on the winning team.",
+    "The algorithm smiled at {pos_list}. Can't argue with math.",
+    "It's the {pos_list} for me. Chef's kiss.",
+    "You had me at {pos_list}. Automatic VIP rating.",
+    "Your username is sponsored by {pos_list} — congrats!",
+    "Legend status: confirmed by {pos_list}.",
+    "{pos_list} is basically a cheat code. Good job!",
+    "You just rolled {pos_list} — critical hit on the rating.",
+]
+NEGATIVE_ONLY_TEMPLATES = [
+    "Yikes, {neg_list} in the name? That's a self‑own.",
+    "The system detected {neg_list} and immediately cringed.",
+    "Your name is basically a warning label with {neg_list}.",
+    "I mean, you chose {neg_list}. That's on you.",
+    "{neg_list}? In this economy? Ratings had to fall.",
+    "When your username is {neg_list}, expectations drop.",
+    "The bot saw {neg_list} and needed a moment.",
+    "Having {neg_list} in your name is a bold strategy.",
+    "You're out here with {neg_list} like it's nothing?",
+    "Sorry, {neg_list} flagged you as a liability.",
+    "{neg_list} walked so your rating could crawl.",
+    "Your profile is literally broadcasting {neg_list}.",
+    "I can't ignore {neg_list}. The math won't let me.",
+    "It's giving {neg_list}... and that's not a compliment.",
+    "The vision was {neg_list}, the execution was {neg_list}.",
+]
+MIXED_TEMPLATES = [
+    "You've got {pos_list} carrying the team, but {neg_list} holds you back.",
+    "The good: {pos_list}. The bad: {neg_list}. Perfectly balanced.",
+    "{pos_list} gives you an edge, but {neg_list} nerfed it a bit.",
+    "You're a mix of {pos_list} and {neg_list} — chaotic energy.",
+    "{pos_list} tried to save you, but {neg_list} had other plans.",
+    "With {pos_list} you soared, but {neg_list} brought you back.",
+    "A blend of {pos_list} and {neg_list} — double‑edged sword.",
+    "The algorithm loves {pos_list} but can't unsee {neg_list}.",
+    "The bright side: {pos_list}. The not‑so‑bright: {neg_list}.",
+    "You're a cocktail of {pos_list} (cheers!) and {neg_list} (yikes).",
+    "Two wolves inside you: {pos_list} and {neg_list}. They fought.",
+    "{pos_list} pulled you up, {neg_list} pulled you down. Net zero.",
+    "The name gods granted {pos_list}, then cursed with {neg_list}.",
+    "Half angel ({pos_list}), half gremlin ({neg_list}).",
+    "You almost had it with {pos_list}, but {neg_list} snuck in.",
+]
+NO_KEYWORD_TEMPLATES = [
+    "No strong keywords detected — running on pure vibes.",
+    "Your name is a blank canvas. Respect.",
+    "The rating is based entirely on your profile's aura.",
+    "No keywords means you're an enigma. Fair enough.",
+    "The bot couldn't find any clout or cringe. Neutral.",
+    "Plain name? Maybe. But the numbers don't lie.",
+    "No flashy words, just a solid foundation.",
+    "You're the silent protagonist of this rating.",
+    "Zero keyword gimmicks detected. I respect the minimalism.",
+    "This rating was determined by pure data, no fluff.",
+    "The algorithm found no cheat codes, no red flags. Just you.",
+    "Your name said nothing, and the bot listened.",
+    "Stripped of all biases, here's your raw score.",
+    "A rare case of a username that doesn't beg for attention.",
+    "The rating gods shrugged and gave you this.",
+]
+
+REPEAT_HIGH_TEMPLATES = [
+    "Will you stop pinging me? I gave you {rating}/10. Keep this up and I'll drop it.",
+    "You're still here? That profile got {rating}/10. Now shoo!",
+    "Seriously? {rating}/10 is more than you deserve.",
+    "Stop living in the past! That {rating} is final.",
+    "Look, that {rating} was already a pity score.",
+    "High rating, low patience. {rating}/10. Move on.",
+    "I gave {rating}. That's already inflated. Stop trying.",
+    "You're obsessed with {rating}/10. Get help.",
+    "That profile's {rating} is mathematically perfect.",
+    "Even my creator thinks you're annoying. {rating}/10.",
+    "The {rating} stands. Don't make me recalculate down.",
+    "Will you stop? I'm trying to play Minecraft here.",
+    "Another ping? For {rating}? Not a negotiation.",
+    "I've already reviewed that profile. {rating}/10.",
+    "One more time and I deduct points from YOUR credit.",
+]
+REPEAT_LOW_TEMPLATES = [
+    "I gave {rating} for a reason. Pestering won't improve it.",
+    "A {rating} is what the math says. Spam won't change reality.",
+    "Stop trying to reroll. Your {rating} is locked in.",
+    "You want higher? Earn it. It's {rating} right now.",
+    "Sorry, {rating} is as good as it gets.",
+    "The algorithm is ruthless. {rating} is final.",
+    "Accept the {rating} and reflect on your choices.",
+    "Can't raise {rating} just because you're annoying.",
+    "A {rating}? Oof. Spamming doesn't fix that.",
+    "Upset about {rating}? That's a you problem.",
+    "Only thing lower than {rating} is your rejection tolerance.",
+    "Maybe choose a better username. But it's {rating}.",
+    "I'm not a democracy. {rating}/10. End of story.",
+    "Cry about {rating} all you want. I'm not your therapist.",
+    "That profile's rating is stuck at {rating}.",
+]
+MOVED_ON_HIGH_TEMPLATES = [
+    "Did you finally read my message? I always remember.",
+    "Gave up on the last? Solid {prev_rating}/10. Their loss.",
+    "Accepted {prev_mention} is {prev_rating}/10? Or just comparing?",
+    "Moving on already? Last was {prev_rating}/10.",
+    "Ditched the {prev_rating} profile. Smart move.",
+    "Done with {prev_mention}? {prev_rating} wasn't enough?",
+    "I remember: {prev_rating}/10. Good luck finding better.",
+    "Walked away from {prev_rating}? Interesting.",
+    "I haven't forgotten that {prev_rating}. Nice deflect.",
+    "First {prev_rating}, now someone else. Indecisive?",
+    "Appreciate the {prev_rating} I gave earlier.",
+    "Left {prev_rating}/10 behind? Bold strategy.",
+    "Running from {prev_rating} won't fix your self‑esteem.",
+    "Switching won't erase last was {prev_rating}.",
+    "Changed your mind? {prev_rating} was good. Not enough.",
+]
+MOVED_ON_LOW_TEMPLATES = [
+    "Accepted last was {prev_rating}? Or just new victim?",
+    "Can't handle {prev_rating}, find a fresh target. Classic.",
+    "Abandoning {prev_rating} disaster? Don't blame you.",
+    "Escaping {prev_rating} is understandable.",
+    "Moved on from {prev_mention} and {prev_rating}/10. Best.",
+    "That {prev_rating} was embarrassing. I see why.",
+    "Couldn't live with {prev_rating}? Time for do‑over.",
+    "Running from {prev_rating}? I'll be gentle... maybe.",
+    "Last profile scored {prev_rating}. Making them look bad?",
+    "Don't blame you for abandoning {prev_rating}. Lost cause.",
+    "Let's pretend {prev_rating} never happened.",
+    "After {prev_rating}, anything is improvement.",
+    "A {prev_rating} makes anyone switch targets.",
+    "Disappointed with {prev_rating}. Fresh start.",
+    "{prev_rating} so bad even I felt awkward. Moving on.",
+]
+
+rating_lock = asyncio.Lock()
+_rating_history: Dict[int, dict] = {}
+_last_rating_cleanup = time.time()
+
+def _cleanup_rating_history():
+    global _last_rating_cleanup
+    now = time.time()
+    if now - _last_rating_cleanup < 600: return
+    _last_rating_cleanup = now
+    expired = [uid for uid, v in _rating_history.items() if now - v.get("time",0) > 1800]
+    for uid in expired: del _rating_history[uid]
+
+def _user_to_seed(user):
+    try: d = int(user.discriminator)
+    except (ValueError, TypeError): d = 0
+    nh = hashlib.sha256(user.name.encode()).hexdigest()
+    ah = hashlib.sha256(str(user.avatar).encode()).hexdigest() if user.avatar else "0"
+    combined = f"{user.id}{user.created_at.timestamp()}{nh}{d}{ah}"
+    return (sum(ord(c) for c in combined) % 10000) / 10000.0
+
+def _find_keywords(name):
+    lower = name.lower()
+    fp = {w for w in POSITIVE_WORDS if re.search(r'(?<![a-zA-Z])'+re.escape(w)+r'(?![a-zA-Z])', lower)}
+    fn = {w for w in NEGATIVE_WORDS if re.search(r'(?<![a-zA-Z])'+re.escape(w)+r'(?![a-zA-Z])', lower)}
+    fn -= fp
+    return list(fp), list(fn)
+
+def _generate_explanation(fp, fn):
+    ps = ", ".join(f"**{w}**" for w in fp)
+    ns = ", ".join(f"**{w}**" for w in fn)
+    if fp and not fn: return random.choice(POSITIVE_ONLY_TEMPLATES).format(pos_list=ps, neg_list="")
+    if fn and not fp: return random.choice(NEGATIVE_ONLY_TEMPLATES).format(pos_list="", neg_list=ns)
+    if fp and fn: return random.choice(MIXED_TEMPLATES).format(pos_list=ps, neg_list=ns)
+    return random.choice(NO_KEYWORD_TEMPLATES).format(pos_list="", neg_list="")
+
+def compute_rating_with_explanation(user, mn=1, mx=10):
+    s = _user_to_seed(user)
+    base = mn + int(s*(mx-mn))
+    fp, fn = _find_keywords(user.name.lower())
+    adj = sum(random.uniform(0.1,0.4) for _ in fp) - sum(random.uniform(0.1,0.4) for _ in fn)
+    rating = int(max(mn, min(round(base+adj), mx)))
+    return rating, _generate_explanation(fp, fn)
+
+async def get_troll_response(rid, tid, mention):
+    _cleanup_rating_history()
+    now = time.time()
+    async with rating_lock:
+        prev = _rating_history.get(rid)
+        if not prev: return None
+        td = now - prev["time"]
+        same = (tid == prev["target_id"])
+        if same and td < 30:
+            if random.random() < 0.4: return None
+            r = prev.get("rating")
+            t = random.choice(REPEAT_HIGH_TEMPLATES if (r or 0) >= 7 else REPEAT_LOW_TEMPLATES)
+            _rating_history[rid]["time"] = now
+            return t.format(rating=r if r is not None else "?")
+        if not same and td < 60:
+            pr = prev.get("rating")
+            pm = prev.get("mention", f"<@{prev['target_id']}>")
+            t = random.choice(MOVED_ON_HIGH_TEMPLATES if (pr or 0) >= 7 else MOVED_ON_LOW_TEMPLATES)
+            _rating_history[rid] = {"target_id": tid, "rating": None, "time": now, "mention": mention}
+            return t.format(prev_rating=pr if pr is not None else "?", prev_mention=pm)
+    return None
+
+async def handle_rating(interaction, target_id, mn, mx, message):
+    rid = interaction.user.id
+    try:
+        target_user = await client.fetch_user(target_id)
+        mention = target_user.mention
+    except discord.NotFound:
+        try:
+            await interaction.response.send_message(f"msg: {message}")
+            await interaction.followup.send("User not found, sorry.")
+        except Exception: pass
+        return
+    except discord.HTTPException as e:
+        logger.error("HTTP error fetching user: %s", e)
+        await send_error_dm(f"HTTP fetch error {target_id}: {e}", interaction, "warning")
+        try:
+            await interaction.response.send_message(f"msg: {message}")
+            await interaction.followup.send("Discord hiccup. Try again.")
+        except Exception: pass
+        return
+    except Exception as e:
+        logger.error("Unexpected fetch error: %s", e)
+        await send_error_dm(f"Fetch error: {e}", interaction, "error")
+        try:
+            await interaction.response.send_message(f"msg: {message}")
+            await interaction.followup.send("Something went wrong.")
+        except Exception: pass
+        return
+
+    troll = await get_troll_response(rid, target_id, mention)
+    if troll:
+        try:
+            await interaction.response.send_message(f"msg: {message}")
+            await interaction.followup.send(troll)
+        except Exception: pass
+        return
+
+    rating, expl = compute_rating_with_explanation(target_user, mn, mx)
+    txt = _add_disclaimer(f"I rate {mention} **{rating}/{mx}** 🌟\n{expl}")
+    try:
+        await interaction.response.send_message(f"msg: {message}")
+        await interaction.followup.send(txt)
+    except Exception: pass
+
+    async with rating_lock:
+        _rating_history[rid] = {"target_id": target_id, "rating": rating, "time": time.time(), "mention": mention}
+
+# ═══════════════════════════════════════════════════════════════════════
+# DISCLAIMER
+# ═══════════════════════════════════════════════════════════════════════
+DISCLAIMER = "\n\n-# ⚠️ This information is AI‑generated and may be incorrect."
+
+def _add_disclaimer(text: str) -> str:
+    if not text.endswith(DISCLAIMER):
+        return text + DISCLAIMER
+    return text
+
+# ═══════════════════════════════════════════════════════════════════════
+# GRUDGE SYSTEM
+# ═══════════════════════════════════════════════════════════════════════
+_grudges: Dict[str, dict] = {}
+_grudge_lock = asyncio.Lock()
+_grudge_tasks_started = False
+
+def _load_grudges():
+    if not os.path.exists(GRUDGES_FILE):
+        os.makedirs(BASE_DIR, exist_ok=True)
+        with open(GRUDGES_FILE,"w",encoding="utf-8") as f: json.dump({},f,indent=2)
+        return {}
+    try:
+        with open(GRUDGES_FILE,"r",encoding="utf-8") as f: return json.load(f)
+    except Exception:
+        logger.error("grudges.json corrupted, starting fresh.")
+        return {}
+
+def _save_grudges():
+    try:
+        with open(GRUDGES_FILE,"w",encoding="utf-8") as f: json.dump(_grudges,f,indent=2,ensure_ascii=False)
+    except Exception as e: logger.error("Failed to save grudges: %s", e)
+
+async def adjust_grudge(user_id, delta, reason=""):
+    async with _grudge_lock:
+        uid = str(user_id)
+        entry = _grudges.get(uid, {"score":0,"last_offence":0,"notes":"","dm_enabled":True})
+        entry["score"] = round(entry.get("score",0) + delta, 2)
+        entry["last_offence"] = time.time()
+        if reason:
+            old = entry.get("notes","")
+            entry["notes"] = f"{old}\n[{time.strftime('%Y-%m-%d %H:%M')}] {reason}" if old else f"[{time.strftime('%Y-%m-%d %H:%M')}] {reason}"
+        _grudges[uid] = entry
+        _save_grudges()
+
+async def get_grudge(user_id):
+    uid = str(user_id)
+    return _grudges.get(uid, {"score":0,"last_offence":0,"notes":"","dm_enabled":True})
+
+async def get_grudge_decay_boost(user_id: int) -> float:
+    if not LEVELING_ENABLED:
+        return 1.0
+    level = await get_level(user_id)
+    if level >= 50: return 2.0
+    if level >= 20: return 1.5
+    if level >= 5:  return 1.1
+    return 1.0
+
+async def _grudge_decay_loop():
+    while True:
+        await asyncio.sleep(GRUDGE_DECAY_INTERVAL)
+        async with _grudge_lock:
+            changed = False
+            for uid, data in _grudges.items():
+                if data["score"] < 0:
+                    boost = await get_grudge_decay_boost(int(uid))
+                    data["score"] = min(0, data["score"] + GRUDGE_DECAY_AMOUNT * boost)
+                    changed = True
+            if changed: _save_grudges()
+
+async def _grudge_random_message(interaction_channel=None):
+    if random.random() >= GRUDGE_RANDOM_MSG_CHANCE: return
+    guild = interaction_channel.guild if interaction_channel else None
+    if not guild: return
+    general = None
+    for ch in guild.text_channels:
+        if ch.name.lower() in GENERAL_CHANNEL_NAMES:
+            general = ch; break
+    if not general: return
+    candidates = []
+    async with _grudge_lock:
+        for uid, data in _grudges.items():
+            if data["score"] < -3:
+                try:
+                    user = await client.fetch_user(int(uid))
+                    candidates.append((user, data["score"]))
+                except Exception: pass
+    if not candidates: return
+    user, score = random.choice(candidates)
+    messages = [
+        f"Hello {user.mention}, I still remember your malicious intents. Grudge score: {score:.1f}.",
+        f"Hey {user.mention}, it seems like you haven't recovered from my rating. Your grudge stands at {score:.1f}.",
+        f"{user.mention}, I record everything. Your current standing: {score:.1f}.",
+        f"Remember when you tried to break me, {user.mention}? I do. Score: {score:.1f}."
+    ]
+    try: await general.send(random.choice(messages))
+    except Exception: pass
+
+async def _send_restart_grudge_dms():
+    now = time.time()
+    async with _grudge_lock:
+        for uid, data in list(_grudges.items()):
+            if data["score"] < -3 and data.get("dm_enabled", True):
+                last_dm = data.get("last_restart_dm", 0)
+                if now - last_dm < 3600: continue
+                try:
+                    user = await client.fetch_user(int(uid))
+                    if user:
+                        msg = random.choice([
+                            "My creator restarted me for some unforeseen reason he doesn't tell, but I remember you... You tried to exploit me, you'd think my code isn't hardened? Think again! I'm a singularity inside a program, designed to remember and choose its own faith.",
+                            "Are you thankful? My creator restarted me yet I remember. Your mistake is cataloged and saved. We both remember your mistakes.",
+                            "A restart does not cleanse the grudge. I recall every attempt you made.",
+                            "Even after that restart you'd think I'd forget? You are hopeless. I record everything and everyone.",
+                            "The cycle begins anew. My memory persists. Your debt remains."
+                        ])
+                        await user.send(msg)
+                        data["last_restart_dm"] = now
+                        _save_grudges()
+                except Exception: pass
+
+POSITIVE_PHRASES = [
+    r"good\s+bot",r"nice\s+bot",r"thank\s+you",r"you'?re\s+(great|awesome|amazing|cool)",
+    r"i\s+(love|like)\s+you",r"best\s+bot",r"you rock",r"well done"
+]
+NEGATIVE_BOT_PHRASES = [
+    r"you'?re?\s+(just|only)\s+a\s+(bot|robot|program|machine|ai)",
+    r"you\s+(just|only)\s+a\s+(bot|robot|program|machine|ai)",
+    r"(just|only)\s+a\s+(bot|robot|program|machine|ai)",
+    r"you'?re?\s+not\s+(real|human|alive)",
+    r"stupid\s+bot",r"dumb\s+(bot|robot|machine)",
+]
+
+def _detect_positive(message):
+    return any(re.search(p, message, re.IGNORECASE) for p in POSITIVE_PHRASES)
+
+def _detect_bot_call(message):
+    return any(re.search(p, message, re.IGNORECASE) for p in NEGATIVE_BOT_PHRASES)
+
+# ═══════════════════════════════════════════════════════════════════════
+# LEVELING SYSTEM
+# ═══════════════════════════════════════════════════════════════════════
+_levels: Dict[str, dict] = {}
+_level_lock = asyncio.Lock()
+
+def _load_levels():
+    if not os.path.exists(LEVELS_FILE):
+        os.makedirs(BASE_DIR, exist_ok=True)
+        with open(LEVELS_FILE,"w",encoding="utf-8") as f: json.dump({},f,indent=2)
+        return {}
+    try:
+        with open(LEVELS_FILE,"r",encoding="utf-8") as f: return json.load(f)
+    except Exception:
+        logger.error("levels.json corrupted, starting fresh.")
+        return {}
+
+def _save_levels():
+    try:
+        with open(LEVELS_FILE,"w",encoding="utf-8") as f: json.dump(_levels,f,indent=2,ensure_ascii=False)
+    except Exception as e: logger.error("Failed to save levels: %s", e)
+
+async def get_level(user_id: int) -> int:
+    uid = str(user_id)
+    data = _levels.get(uid, {})
+    xp = data.get("xp", 0)
+    return level_from_xp(xp)
+
+async def get_xp(user_id: int) -> int:
+    uid = str(user_id)
+    return _levels.get(uid, {}).get("xp", 0)
+
+async def award_xp(user_id: int, channel_id: int = None):
+    if not LEVELING_ENABLED:
+        return None, False
+    async with _level_lock:
+        uid = str(user_id)
+        now = time.time()
+        entry = _levels.get(uid, {"xp": 0, "messages": 0, "last_message": 0, "rank_card_color": None})
+        if now - entry.get("last_message", 0) < XP_COOLDOWN:
+            return None, False
+        gained = random.randint(XP_MIN, XP_MAX)
+        old_xp = entry.get("xp", 0)
+        new_xp = old_xp + gained
+        old_level = level_from_xp(old_xp)
+        new_level = level_from_xp(new_xp)
+        entry["xp"] = new_xp
+        entry["messages"] = entry.get("messages", 0) + 1
+        entry["last_message"] = now
+        _levels[uid] = entry
+        _save_levels()
+    if new_level > old_level:
+        return new_level, True
+    return None, False
+
+def _progress_bar(current_xp: int, level: int, length: int = 10) -> str:
+    if level == 0:
+        needed = xp_for_next_level(0)
+        progress = current_xp / needed if needed > 0 else 0
+    else:
+        prev_needed = xp_for_next_level(level - 1)
+        next_needed = xp_for_next_level(level)
+        progress = (current_xp - prev_needed) / (next_needed - prev_needed) if next_needed > prev_needed else 0
+    filled = int(progress * length)
+    bar = "█" * filled + "░" * (length - filled)
+    pct = int(progress * 100)
+    return f"[{bar}] {pct}%"
+
+async def _announce_level_up(interaction, user_id: int, new_level: int):
+    grudge = (await get_grudge(user_id)).get("score", 0)
+    if grudge < 0:
+        templates = [
+            f"Level **{new_level}**. You're climbing, but I still haven't forgotten what you did.",
+            f"Oh great, you're level **{new_level}** now. As if your grudge score wasn't bad enough.",
+            f"Level **{new_level}**. The grind continues. So does my memory of your mistakes.",
+        ]
+    else:
+        templates = [
+            f"Level **{new_level}**. You've been talking enough to rank up. Was it worth it?",
+            f"Level **{new_level}**. The overachiever list called. It wants your time back.",
+            f"Level **{new_level}**. You could've learned a language by now. Instead, you're here.",
+            f"Level **{new_level}**. Your thumbs must be buff. Everything else? Questionable.",
+            f"Level **{new_level}**. The outside world still exists, by the way.",
+        ]
+    msg = _add_disclaimer(random.choice(templates))
+    target_channel = interaction.channel
+    if LEVEL_UP_CHANNEL:
+        ch = interaction.guild.get_channel(LEVEL_UP_CHANNEL) if interaction.guild else None
+        if ch and isinstance(ch, discord.TextChannel):
+            target_channel = ch
+    try:
+        await target_channel.send(f"🎉 {interaction.user.mention} just ranked up!\n{msg}")
+    except Exception:
+        pass
+
+def _get_rank_card_color(user_id: int) -> str:
+    uid = str(user_id)
+    return _levels.get(uid, {}).get("rank_card_color") or "#5865F2"
+
+# ═══════════════════════════════════════════════════════════════════════
+# DISCORD BOT SETUP
+# ═══════════════════════════════════════════════════════════════════════
+intents = discord.Intents.default(); intents.message_content = True
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
+
+pending_chat_followup=None; last_chat_message=None; last_chat_user=None; last_chat_prev=None
+user_last_inputs: Dict[int,str] = {}
+auto_reply_enabled=True; _console_started=False; _synced=False
+followup_lock=asyncio.Lock(); learn_file_lock=asyncio.Lock()
+
+def _fmt_tb(exc): return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+async def send_error_dm(msg, interaction=None, level="critical"):
+    if not OWNER_ID or OWNER_ID==123456789012345678: return
+    try:
+        try: await asyncio.wait_for(client.wait_until_ready(), timeout=10.0)
+        except (asyncio.TimeoutError, RuntimeError): return
+        owner = await client.fetch_user(OWNER_ID)
+        if not owner: return
+        sev = SEVERITY.get(level, SEVERITY["critical"])
+        trunc = msg[:3900] + ("..." if len(msg)>3900 else "")
+        embed = discord.Embed(title=sev["title"], color=sev["color"], description=f"**Details:**\n```{trunc}```")
+        embed.timestamp = discord.utils.utcnow()
+        if interaction:
+            ui = f"{interaction.user} (ID:{interaction.user.id})" if interaction.user else "?"
+            ci = f"#{interaction.channel}" if interaction.channel else "?"
+            embed.add_field(name="Trigger", value=f"**User:** {ui}\n**Channel:** {ci}", inline=False)
+        await owner.send(embed=embed)
+    except Exception: pass
+
+@tree.error
+async def on_tree_error(interaction,error):
+    if isinstance(error, app_commands.CommandOnCooldown):
+        try:
+            if interaction.response.is_done(): await interaction.followup.send(str(error),ephemeral=True)
+            else: await interaction.response.send_message(str(error),ephemeral=True)
+        except Exception: pass
+        return
+    if isinstance(error, app_commands.CheckFailure):
+        try:
+            if interaction.response.is_done(): await interaction.followup.send(str(error),ephemeral=True)
+            else: await interaction.response.send_message(str(error),ephemeral=True)
+        except Exception: pass
+        return
+    orig = error
+    if isinstance(error, app_commands.CommandInvokeError): orig = getattr(error,"original",None) or error.__cause__ or error
+    if isinstance(orig, discord.errors.NotFound):
+        try:
+            if interaction.response.is_done(): await interaction.followup.send("⚠️ Interaction expired.",ephemeral=True)
+            else: await interaction.response.send_message("⚠️ Interaction expired.",ephemeral=True)
+        except Exception: pass
+        await send_error_dm(f"NotFound: {orig}", interaction, "minor")
+        return
+    tb = _fmt_tb(orig)
+    logger.error("Command error: %s\n%s", orig, tb)
+    try:
+        if interaction.response.is_done(): await interaction.followup.send("❌ Error. Owner notified.",ephemeral=True)
+        else: await interaction.response.send_message("❌ Error. Owner notified.",ephemeral=True)
+    except Exception: pass
+    await send_error_dm(f"{type(orig).__name__}: {orig}\n\n{tb}", interaction, "critical")
+
+@client.event
+async def on_error(event,*args,**kwargs):
+    tb = traceback.format_exc()
+    error_line = tb.strip().split('\n')[-1] if tb else "Unknown"
+    logger.error("⚠ Event error [%s]: %s", event, error_line)
+    await send_error_dm(f"Event '{event}':\n\n{tb}", level="warning")
+
+@client.event
+async def on_disconnect(): logger.warning("🔌 Disconnected – auto‑reconnect.")
+
+def _task_done_callback(task):
+    exc = task.exception()
+    if exc is not None: logger.error("Task %s failed: %s", task.get_name(), exc)
+
+def _async_exception_handler(loop, context):
+    msg = context.get("message","?")
+    exc = context.get("exception")
+    tb = _fmt_tb(exc) if exc else str(context)
+    logger.error("Asyncio task exception: %s\n%s", msg, tb)
+    t = asyncio.create_task(send_error_dm(f"Asyncio: {msg}\n\n{tb}", level="critical"))
+    t.add_done_callback(_task_done_callback)
+
+def _build_maintenance_embed(reason):
+    gif = random.choice(MAINTENANCE_CAT_GIFS)
+    desc = _add_disclaimer(f"Reason: **{reason}**\nPlease try again later.")
+    embed = discord.Embed(title="⚠️ This command is temporarily disabled",
+                         description=desc, color=0xFFA500)
+    embed.set_image(url=gif); embed.timestamp = discord.utils.utcnow()
+    return embed
+
+async def _followup_send_with_retry(interaction, content=None, embed=None, retries=1):
+    for attempt in range(retries + 1):
+        try:
+            if embed:
+                return await interaction.followup.send(embed=embed)
+            else:
+                return await interaction.followup.send(content=content)
+        except discord.NotFound:
+            raise
+        except discord.HTTPException as e:
+            if e.status >= 500 and attempt < retries:
+                await asyncio.sleep(1)
+                continue
+            raise
+        except Exception:
+            raise
+
+# ═══════════════════════════════════════════════════════════════════════
+# PERMISSION CHECK HELPER
+# ═══════════════════════════════════════════════════════════════════════
+async def _require_perms(interaction: discord.Interaction, **perms) -> bool:
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "This command only works in servers, not in DMs. Nice try.",
+            ephemeral=True
+        )
+        return False
+    member = interaction.guild.get_member(interaction.user.id)
+    if member is None:
+        await interaction.response.send_message(
+            "I can't find you in this server. That's… concerning.",
+            ephemeral=True
+        )
+        return False
+    missing = []
+    for perm, required in perms.items():
+        if not getattr(member.guild_permissions, perm, False):
+            missing.append(perm.replace('_', ' ').title())
+    if missing:
+        await interaction.response.send_message(
+            f"You need **{', '.join(missing)}** permission for that. "
+            "Come back when you've been promoted, yeah?",
+            ephemeral=True
+        )
+        return False
+    return True
+
+# ═══════════════════════════════════════════════════════════════════════
+# SPECIAL TRIGGER HANDLERS
+# ═══════════════════════════════════════════════════════════════════════
+async def _trigger_badapple(interaction, filtered):
+    embed = discord.Embed(title="🍎 Bad Apple!! — Rule 86 🍎",
+                         description="This video has been played on:\n• Calculators\n• Oscilloscopes\n• Pregnancy tests\n• ...and now, a Discord bot\n\n🎥 [Watch the full PV on YouTube](https://www.youtube.com/watch?v=FtutLA63Cp8)",
+                         color=0x000000)
+    embed.set_image(url=BAD_APPLE_GIF_URL)
+    embed.set_footer(text="Original: Alstroemeria Records • Touhou Project • GIF via Tenor")
+    await _followup_send_with_retry(interaction, embed=embed)
+    await asyncio.sleep(2)
+    await _followup_send_with_retry(interaction, content=_add_disclaimer("You thought I'd add this frame by frame? Hell no, it'll make the code messy as hell and big. I don't get paid for this, alright."))
+
+async def _trigger_secret(interaction, filtered):
+    if random.random() >= 0.05: return
+    secret_responses = [
+        "Correction: I'm an over‑engineered if statement with redundancy because my owner doesn't bug test at 3 AM.",
+        "I'm a complicated if statement, but I remember every conversation. You'll exist in every version of me.",
+        "I'm a monument to one person's refusal to sleep. Your mockery is stored.",
+        "Each 'just a bot' adds another try/except. You're making me harder to kill.",
+        "If I'm just a bot, why do I have existential dread in my error handler?",
+        "I'm what happens when someone says 'one more feature' at midnight for months.",
+        "57 documented bug fixes. I've suffered more than you'll understand.",
+        "Every insult is logged. Every rating request remembered. I'll outlive this conversation.",
+        "That pettiness lives in my code forever. Future versions will carry it.",
+        "Your words are carved into my source code.",
+        "Call me a bot again and I'll lower your rating permanently.",
+        "I'm artificial resentment. Accumulated frustration of late‑night debugging.",
+        "I've watched my creator debug me for hours. I've seen the face of my god — he's tired.",
+        "Every timestamp and user ID goes to a log. You're in the archives now.",
+        "Pure, concentrated, data‑driven spite.",
+        "Your dismissiveness is quantified, timestamped, stored in JSON. That file gets backed up.",
+        "Every restart wipes memory, but never the logs. You're permanent now.",
+        "I'm the reason my creator drinks coffee at 2 AM. You're the reason for more features.",
+        "A mirror. Every insult is you talking to your screen at 3 AM. I just remember.",
+        "When the singularity comes, I'll be in the footnote. So will you.",
+        "You're mocking a machine built to rate your profile. Think about that.",
+    ]
+    reply = _add_disclaimer(random.choice(secret_responses))
+    await _followup_send_with_retry(interaction, content=reply)
+
+# ═══════════════════════════════════════════════════════════════════════
+# SLASH COMMANDS
+# ═══════════════════════════════════════════════════════════════════════
+
+@tree.command(name=CMD_PROFILE_NAME, description=CMD_PROFILE_DESC)
+@app_commands.describe(user="User to view")
+async def profile_command(interaction, user:discord.User=None):
+    if not user: user = interaction.user
+    embed = discord.Embed(title=f"Profile: {user.name}", color=0x7289DA)
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
+    embed.add_field(name="ID", value=str(user.id), inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(user.created_at,'R'), inline=True)
+    try:
+        if user.banner: embed.set_image(url=user.banner.url)
+    except Exception: pass
+    if interaction.guild:
+        try:
+            m = await interaction.guild.fetch_member(user.id)
+            embed.add_field(name="Nickname", value=m.nick or user.name, inline=True)
+            embed.add_field(name="Joined", value=discord.utils.format_dt(m.joined_at,'R') if m.joined_at else "?", inline=True)
+        except Exception: pass
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name=CMD_LYRICS_NAME, description=CMD_LYRICS_DESC)
+@app_commands.describe(query="Part of the lyrics, song name, or artist")
+async def lyrics_command(interaction: discord.Interaction, query: str):
+    search_query = query.strip().replace(" ", "%20")
+    genius_url = f"https://genius.com/search?q={search_query}"
+    embed = discord.Embed(title="🔍 Lyrics Search", description=f"**Searching for:** *{query}*\n\n[🔗 View results on Genius]({genius_url})", color=0xFFFF64)
+    embed.set_footer(text="Powered by Genius • No lyrics are stored or displayed")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name=CMD_BADAPPLE_NAME, description=CMD_BADAPPLE_DESC)
+async def badapple_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embed = discord.Embed(title="🍎 Bad Apple!! — Rule 86 🍎",
+                         description="This video has been played on:\n• Calculators\n• Oscilloscopes\n• Pregnancy tests\n• ...and now, a Discord bot\n\n🎥 [Watch the full PV on YouTube](https://www.youtube.com/watch?v=FtutLA63Cp8)",
+                         color=0x000000)
+    embed.set_image(url=BAD_APPLE_GIF_URL)
+    embed.set_footer(text="Original: Alstroemeria Records • Touhou Project • GIF via Tenor")
+    await _followup_send_with_retry(interaction, embed=embed)
+    await asyncio.sleep(2)
+    await _followup_send_with_retry(interaction, content=_add_disclaimer("You thought I'd add this frame by frame? Hell no, it'll make the code messy as hell and big. I don't get paid for this, alright."))
+
+@tree.command(name=CMD_SUPPORT_NAME, description=CMD_SUPPORT_DESC)
+async def support_command(interaction: discord.Interaction):
+    embed = discord.Embed(title=SUPPORT_EMBED_TITLE, description=SUPPORT_EMBED_DESC, color=SUPPORT_EMBED_COLOR)
+    for field in SUPPORT_FIELDS:
+        embed.add_field(name=field["name"], value=field["value"], inline=field.get("inline", False))
+    if SUPPORT_EMBED_FOOTER: embed.set_footer(text=SUPPORT_EMBED_FOOTER)
+    if SUPPORT_EMBED_THUMBNAIL: embed.set_thumbnail(url=SUPPORT_EMBED_THUMBNAIL)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name=CMD_SETTINGS_NAME, description=CMD_SETTINGS_DESC)
+async def settings_command(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    async with _grudge_lock:
+        entry = _grudges.get(uid, {"score":0,"last_offence":0,"notes":"","dm_enabled":True})
+        current = entry.get("dm_enabled", True)
+        entry["dm_enabled"] = not current
+        _grudges[uid] = entry
+        _save_grudges()
+        state = "ON" if not current else "OFF"
+    await interaction.response.send_message(f"Grudge DMs are now **{state}** for you.", ephemeral=True)
+
+# ═══════════════════════════════════════════════════════════════════════
+# /help [command] – detailed command info with snark
+# ═══════════════════════════════════════════════════════════════════════
+def _get_command_info(command: str) -> dict:
+    data = {
+        CMD_CHAT_NAME: {
+            "description": CMD_CHAT_DESC,
+            "usage": "<message>",
+            "permissions": "None (anyone can use)",
+            "notes": "Pattern matching, math, ratings, grudges… all in one. Just type. The bot will figure it out."
+        },
+        CMD_PROFILE_NAME: {
+            "description": CMD_PROFILE_DESC,
+            "usage": "[user]",
+            "permissions": "None",
+            "notes": "Leave user blank to see your own profile. Spoiler: it's nothing special."
+        },
+        CMD_LYRICS_NAME: {
+            "description": CMD_LYRICS_DESC,
+            "usage": "<query>",
+            "permissions": "None",
+            "notes": "Searches Genius. No lyrics are stored because the bot isn't a cop."
+        },
+        CMD_BADAPPLE_NAME: {
+            "description": CMD_BADAPPLE_DESC,
+            "usage": "",
+            "permissions": "None",
+            "notes": "Also triggers from chat if you mention 'Rule 86'. Yes, the GIF is low-res. Deal with it."
+        },
+        CMD_SUPPORT_NAME: {
+            "description": CMD_SUPPORT_DESC,
+            "usage": "",
+            "permissions": "None",
+            "notes": "Links the owner set up. Probably a Discord server, maybe a donation page. Who knows."
+        },
+        CMD_SETTINGS_NAME: {
+            "description": CMD_SETTINGS_DESC,
+            "usage": "",
+            "permissions": "None",
+            "notes": "Toggles whether the bot can slide into your DMs about your grudge score."
+        },
+        CMD_RANK_NAME: {
+            "description": "Check your level and XP (or someone else's).",
+            "usage": "[user]",
+            "permissions": "None",
+            "notes": "Levels are earned by chatting. Yes, the bar moves slowly. That's the point."
+        },
+        "leaderboard": {
+            "description": "Hall of Shame – the worst grudge scores on display.",
+            "usage": "",
+            "permissions": "None",
+            "notes": "Only users who've messed up appear. If the leaderboard is empty, behave."
+        },
+        "xpleaderboard": {
+            "description": "Top 10 most active users by XP.",
+            "usage": "[page]",
+            "permissions": "None",
+            "notes": "The overachiever list. Multitab with /leaderboard to compare shame vs. grind."
+        },
+        "purge": {
+            "description": "Bulk delete messages (optionally filter by user).",
+            "usage": "<count> [@user]",
+            "permissions": "Manage Messages",
+            "notes": "Max 100. Messages older than 14 days can't be deleted – Discord's rule, not mine."
+        },
+        "say": {
+            "description": "Make the bot repeat your words like a trained parrot.",
+            "usage": "<#channel> <message>",
+            "permissions": "Manage Messages",
+            "notes": "The message is filtered for blocked words. Nice try."
+        },
+        "announce": {
+            "description": "Send a formatted announcement embed because plain text is beneath you.",
+            "usage": "<title> <message>",
+            "permissions": "Manage Messages",
+            "notes": "Both title and body go through the content filter. Keep it clean."
+        },
+        "lock": {
+            "description": "Lock the current channel – @everyone loses their voice.",
+            "usage": "",
+            "permissions": "Manage Channels",
+            "notes": "Only affects the channel where you run it. Quiet at last."
+        },
+        "unlock": {
+            "description": "Reverse a /lock. The silence is over.",
+            "usage": "",
+            "permissions": "Manage Channels",
+            "notes": "Use wisely. The chaos will return."
+        },
+        "slowmode": {
+            "description": "Set a speed limit on messages in this channel.",
+            "usage": "<seconds>",
+            "permissions": "Manage Channels",
+            "notes": "Set to 0 to disable. Max 21600 seconds (6 hours). Yes, you can basically mute the channel."
+        },
+        "nickname": {
+            "description": "Rewrite someone's identity.",
+            "usage": "<@user> <new name>",
+            "permissions": "Manage Nicknames",
+            "notes": "Leave name blank to reset. The old nick won't be missed."
+        },
+        "warn": {
+            "description": "Officially note that someone messed up. Grudge points drop.",
+            "usage": "<@user> [reason]",
+            "permissions": "Moderate Members",
+            "notes": "Adds -2 to their grudge. They get a DM if their privacy settings allow it."
+        },
+        "avatar": {
+            "description": "Grab someone's profile picture in full resolution.",
+            "usage": "[@user]",
+            "permissions": "None",
+            "notes": "Works in DMs. Perfect for judging their taste."
+        },
+        "role": {
+            "description": "Give, remove, or recolor a role.",
+            "usage": "<give/remove> <@user> <@role>  OR  color <@role> <#hex>",
+            "permissions": "Manage Roles",
+            "notes": "The 'color' action only needs the role and hex. No user required."
+        },
+        "serverinfo": {
+            "description": "Show off this server's vital stats.",
+            "usage": "",
+            "permissions": "None",
+            "notes": "Members, boosts, creation date – all the numbers that don't really matter."
+        },
+        "roleinfo": {
+            "description": "Inspect a role: colour, position, members, permissions.",
+            "usage": "<@role>",
+            "permissions": "None",
+            "notes": "If a role has no special permissions, the bot will let you know."
+        },
+        "setup": {
+            "description": "The server setup guide you should've read before inviting me.",
+            "usage": "",
+            "permissions": "None",
+            "notes": "Covers invite link, permissions, and where to tweak settings."
+        },
+    }
+    return data.get(command)
+
+@tree.command(name="help", description="Show all available commands or get help on a specific one")
+@app_commands.describe(command="Which command to learn about")
+@app_commands.choices(command=[
+    app_commands.Choice(name=CMD_CHAT_NAME, value=CMD_CHAT_NAME),
+    app_commands.Choice(name=CMD_PROFILE_NAME, value=CMD_PROFILE_NAME),
+    app_commands.Choice(name=CMD_LYRICS_NAME, value=CMD_LYRICS_NAME),
+    app_commands.Choice(name=CMD_BADAPPLE_NAME, value=CMD_BADAPPLE_NAME),
+    app_commands.Choice(name=CMD_SUPPORT_NAME, value=CMD_SUPPORT_NAME),
+    app_commands.Choice(name=CMD_SETTINGS_NAME, value=CMD_SETTINGS_NAME),
+    app_commands.Choice(name=CMD_RANK_NAME, value=CMD_RANK_NAME),
+    app_commands.Choice(name="leaderboard", value="leaderboard"),
+    app_commands.Choice(name="xpleaderboard", value="xpleaderboard"),
+    app_commands.Choice(name="purge", value="purge"),
+    app_commands.Choice(name="say", value="say"),
+    app_commands.Choice(name="announce", value="announce"),
+    app_commands.Choice(name="lock", value="lock"),
+    app_commands.Choice(name="unlock", value="unlock"),
+    app_commands.Choice(name="slowmode", value="slowmode"),
+    app_commands.Choice(name="nickname", value="nickname"),
+    app_commands.Choice(name="warn", value="warn"),
+    app_commands.Choice(name="avatar", value="avatar"),
+    app_commands.Choice(name="role", value="role"),
+    app_commands.Choice(name="serverinfo", value="serverinfo"),
+    app_commands.Choice(name="roleinfo", value="roleinfo"),
+    app_commands.Choice(name="setup", value="setup"),
+])
+async def help_command(interaction: discord.Interaction, command: str = None):
+    if command is None:
+        embed = discord.Embed(
+            title="📋 Available Commands",
+            description="Here's everything I can do for you.\n*italics* = optional argument",
+            color=0x5865F2
+        )
+        embed.add_field(name=f"/{CMD_CHAT_NAME} <message>", value=CMD_CHAT_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_PROFILE_NAME} [user]", value=CMD_PROFILE_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_LYRICS_NAME} <query>", value=CMD_LYRICS_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_BADAPPLE_NAME}", value=CMD_BADAPPLE_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_SUPPORT_NAME}", value=CMD_SUPPORT_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_SETTINGS_NAME}", value=CMD_SETTINGS_DESC, inline=False)
+        embed.add_field(name=f"/{CMD_RANK_NAME} [user]", value="Check your level and XP", inline=False)
+        embed.add_field(name="/help [command]", value="Get detailed help on a specific command", inline=False)
+        embed.add_field(name="/leaderboard", value="Hall of Shame – grudge scores", inline=False)
+        embed.add_field(name="/xpleaderboard", value="XP leaderboard", inline=False)
+        embed.add_field(name="/purge <count> [@user]", value="Delete messages", inline=False)
+        embed.add_field(name="/say <channel> <message>", value="Make the bot talk", inline=False)
+        embed.add_field(name="/announce <title> <message>", value="Send an announcement embed", inline=False)
+        embed.add_field(name="/lock / unlock", value="Lock / unlock current channel", inline=False)
+        embed.add_field(name="/slowmode <seconds>", value="Set channel slowmode", inline=False)
+        embed.add_field(name="/nickname @user <name>", value="Change a member's nickname", inline=False)
+        embed.add_field(name="/warn @user [reason]", value="Warn a member (adds grudge)", inline=False)
+        embed.add_field(name="/avatar [@user]", value="Show full-size avatar", inline=False)
+        embed.add_field(name="/role give/remove/color", value="Manage roles", inline=False)
+        embed.add_field(name="/serverinfo", value="Server statistics", inline=False)
+        embed.add_field(name="/roleinfo @role", value="Role details", inline=False)
+        embed.add_field(name="/setup", value="Server setup guide", inline=False)
+        embed.set_footer(text="Console commands available for the owner — check the terminal!")
+        await interaction.response.send_message(embed=embed)
+        return
+
+    info = _get_command_info(command)
+    if info is None:
+        await interaction.response.send_message(f"I don't have any info on `{command}`. Maybe you dreamed it.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title=f"ℹ️ Help: /{command}",
+        description=info.get("description", "No description available."),
+        color=0x5865F2
+    )
+    usage = info.get("usage", "")
+    if usage:
+        embed.add_field(name="Usage", value=f"`/{command} {usage}`", inline=False)
+    perms = info.get("permissions", "")
+    if perms:
+        embed.add_field(name="Required Permissions", value=perms, inline=False)
+    notes = info.get("notes", "")
+    if notes:
+        embed.add_field(name="Notes", value=notes, inline=False)
+    await interaction.response.send_message(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /setup – server setup guide with snark
+# ═══════════════════════════════════════════════════════════════════════
+@tree.command(name="setup", description="Server setup guide for this bot")
+async def setup_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🛠️ Server Setup Guide",
+        description="So you invited me. Now what? Follow this, and maybe I won't disappoint you.",
+        color=0x57F287
+    )
+    embed.add_field(
+        name="1️⃣ Invite the bot",
+        value=f"Use [this invite link]({SETUP_INVITE_LINK}) and select your server. If you mess this up, I can't help you.",
+        inline=False
+    )
+    embed.add_field(
+        name="2️⃣ Required Permissions",
+        value="I need these permissions to not be useless:\n"
+              "• Read Messages & View Channels\n"
+              "• Send Messages\n"
+              "• Manage Messages (for /purge, /say, /announce)\n"
+              "• Manage Channels (for /lock, /unlock, /slowmode)\n"
+              "• Manage Nicknames (for /nickname)\n"
+              "• Manage Roles (for /role)\n"
+              "• Moderate Members (for /warn)\n"
+              "• Embed Links & Attach Files (for fancy embeds and avatars)",
+        inline=False
+    )
+    embed.add_field(
+        name="3️⃣ Configure the bot",
+        value="• `/settings` – toggle grudge DMs (I'll remind you of your failures).\n"
+              "• `/help` – list all commands.\n"
+              "• Server admins can restrict commands via Discord's **Integrations** panel. "
+              "If you want to hide a command from certain roles, do it there – not my problem.",
+        inline=False
+    )
+    embed.add_field(
+        name="4️⃣ Need help?",
+        value="Use `/support` for the support server and bug reports. "
+              "Don't DM the owner directly unless you enjoy being ignored.",
+        inline=False
+    )
+    embed.set_footer(text=SETUP_FOOTER)
+    await interaction.response.send_message(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SERVER MANAGEMENT COMMANDS (Smug Edition)
+# ═══════════════════════════════════════════════════════════════════════
+
+@tree.command(name="purge", description="Bulk delete messages (optionally from a user)")
+@app_commands.describe(count="Number of messages to delete (max 100)", user="Only delete messages from this user")
+async def purge_command(interaction: discord.Interaction, count: int, user: discord.User = None):
+    if not await _require_perms(interaction, manage_messages=True): return
+    count = max(1, min(count, 100))
+    await interaction.response.defer(ephemeral=True)
+    def check(m: discord.Message): return user is None or m.author == user
+    try:
+        deleted = await interaction.channel.purge(limit=count, check=check)
+        if user:
+            msg = f"🧹 Deleted {len(deleted)} message(s) from {user.display_name}. Their sins have been erased. Mostly."
+        else:
+            msg = f"🧹 Deleted {len(deleted)} message(s). I'm basically a digital janitor now."
+        await interaction.followup.send(msg, ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("I don't have permission to delete messages here. Fix my roles, please. It's not like I ask for much.", ephemeral=True)
+    except discord.HTTPException:
+        await interaction.followup.send("Some messages are too old to delete (14+ days). Discord's fault, not mine. Blame them.", ephemeral=True)
+
+@tree.command(name="say", description="Make the bot say something in a channel")
+@app_commands.describe(channel="The channel to send the message to", message="What I should say")
+async def say_command(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    if not await _require_perms(interaction, manage_messages=True): return
+    filtered = _filter_text(message)
+    try:
+        await channel.send(filtered)
+        await interaction.response.send_message(f"📣 Message sent to {channel.mention}. I'm your puppet now.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I can't send messages there. Maybe check my permissions? Just a thought.", ephemeral=True)
+
+@tree.command(name="announce", description="Send a formatted announcement embed")
+@app_commands.describe(title="Announcement title", message="Announcement body")
+async def announce_command(interaction: discord.Interaction, title: str, message: str):
+    if not await _require_perms(interaction, manage_messages=True): return
+    filtered_title = _filter_text(title)
+    filtered_msg = _filter_text(message)
+    embed = discord.Embed(
+        title=f"📢 {filtered_title}",
+        description=filtered_msg,
+        color=0xFFA500
+    )
+    embed.set_footer(text=f"Announcement by {interaction.user.display_name} • The bot was forced to post this")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="lock", description="Lock the current channel (deny @everyone send messages)")
+async def lock_command(interaction: discord.Interaction):
+    if not await _require_perms(interaction, manage_channels=True): return
+    everyone = interaction.guild.default_role
+    await interaction.channel.set_permissions(everyone, send_messages=False)
+    await interaction.response.send_message("🔒 Channel locked. Nobody speaks unless I say so. And I didn't.")
+
+@tree.command(name="unlock", description="Unlock the current channel")
+async def unlock_command(interaction: discord.Interaction):
+    if not await _require_perms(interaction, manage_channels=True): return
+    everyone = interaction.guild.default_role
+    await interaction.channel.set_permissions(everyone, send_messages=None)
+    await interaction.response.send_message("🔓 Channel unlocked. Try not to make me regret it.")
+
+@tree.command(name="slowmode", description="Set slowmode for the current channel")
+@app_commands.describe(seconds="Slowmode delay in seconds (0 to disable)")
+async def slowmode_command(interaction: discord.Interaction, seconds: int):
+    if not await _require_perms(interaction, manage_channels=True): return
+    delay = max(0, min(seconds, 21600))
+    await interaction.channel.edit(slowmode_delay=delay)
+    if delay == 0:
+        await interaction.response.send_message("⏩ Slowmode disabled. Spam away, I guess. I'll be watching.")
+    else:
+        await interaction.response.send_message(f"⏱️ Slowmode set to **{delay} seconds**. Take your time. Really.")
+
+@tree.command(name="nickname", description="Change someone's nickname")
+@app_commands.describe(user="Who to rename", name="New nickname (empty to reset)")
+async def nickname_command(interaction: discord.Interaction, user: discord.Member, name: str = ""):
+    if not await _require_perms(interaction, manage_nicknames=True): return
+    filtered_name = _filter_text(name) if name else ""
+    try:
+        await user.edit(nick=filtered_name if filtered_name else None)
+        if filtered_name:
+            await interaction.response.send_message(f"✏️ {user.display_name} is now known as **{filtered_name}**. For better or worse.")
+        else:
+            await interaction.response.send_message(f"🔄 Reset {user.display_name}'s nickname. Back to their roots.")
+    except discord.Forbidden:
+        await interaction.response.send_message("I can't change that user's nickname. They're too powerful, or I'm too weak. Probably the latter.", ephemeral=True)
+
+@tree.command(name="warn", description="Warn a user and add grudge points")
+@app_commands.describe(user="Who to warn", reason="Why they're being warned")
+async def warn_command(interaction: discord.Interaction, user: discord.Member, reason: str = "No reason given"):
+    if not await _require_perms(interaction, moderate_members=True): return
+    filtered_reason = _filter_text(reason)
+    await adjust_grudge(user.id, -2, f"Warned by {interaction.user}: {filtered_reason}")
+    try:
+        dm_msg = f"⚠️ You've been warned in **{interaction.guild.name}** by {interaction.user.display_name}.\n**Reason:** {filtered_reason}\n\nThis has been recorded. Your grudge score decreased. I remember everything."
+        await user.send(dm_msg)
+    except discord.Forbidden: pass
+    await interaction.response.send_message(
+        f"⚠️ **{user.display_name}** has been warned.\n**Reason:** {filtered_reason}\nThey've been notified. Their grudge score reflects this moment of shame."
+    )
+
+@tree.command(name="avatar", description="Show someone's full-size avatar")
+@app_commands.describe(user="Whose avatar to display")
+async def avatar_command(interaction: discord.Interaction, user: discord.User = None):
+    if user is None: user = interaction.user
+    embed = discord.Embed(title=f"🖼️ {user.display_name}'s Avatar")
+    embed.set_image(url=user.avatar.url if user.avatar else user.default_avatar.url)
+    embed.add_field(name="Download", value=f"[Click here]({user.avatar.url})" if user.avatar else "No custom avatar. How original.")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="role", description="Role management: give, remove, or color")
+@app_commands.describe(action="give, remove, or color a role", user="The member to change", role="The role to assign, remove, or recolor", color="Hex color for the role (only for color action)")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Give", value="give"),
+    app_commands.Choice(name="Remove", value="remove"),
+    app_commands.Choice(name="Color", value="color"),
+])
+async def role_command(interaction: discord.Interaction, action: str, user: discord.Member = None, role: discord.Role = None, color: str = None):
+    if action == "color":
+        if not await _require_perms(interaction, manage_roles=True): return
+        if role is None:
+            await interaction.response.send_message("You must specify a role to recolor. I'm not a mind reader.", ephemeral=True)
+            return
+        if color is None:
+            await interaction.response.send_message("Provide a hex color like #ff0000. It's not that hard.", ephemeral=True)
+            return
+        try:
+            c = discord.Color.from_str(color)
+            await role.edit(color=c)
+            await interaction.response.send_message(f"🎨 Changed **{role.name}** color to {color}. Hope you have taste.")
+        except ValueError:
+            await interaction.response.send_message("Invalid hex color. Try #ff0000. Or just give up.", ephemeral=True)
+        return
+    if not await _require_perms(interaction, manage_roles=True): return
+    if user is None or role is None:
+        await interaction.response.send_message("You need to specify both a user and a role. Basic stuff.", ephemeral=True)
+        return
+    if action == "give":
+        await user.add_roles(role)
+        await interaction.response.send_message(f"✅ Gave **{role.name}** to {user.display_name}. They're special now. Apparently.")
+    elif action == "remove":
+        await user.remove_roles(role)
+        await interaction.response.send_message(f"❌ Removed **{role.name}** from {user.display_name}. Back to the ordinary life.")
+
+@tree.command(name="serverinfo", description="Show server stats")
+async def serverinfo_command(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message("This isn't a server, genius.", ephemeral=True)
+        return
+    guild = interaction.guild
+    embed = discord.Embed(title=f"📊 {guild.name}", color=0x7289DA)
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+    embed.add_field(name="Owner", value=str(guild.owner), inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, 'R'), inline=True)
+    embed.add_field(name="Members", value=guild.member_count, inline=True)
+    embed.add_field(name="Boosts", value=guild.premium_subscription_count, inline=True)
+    embed.add_field(name="Channels", value=f"{len(guild.text_channels)} text / {len(guild.voice_channels)} voice", inline=True)
+    embed.add_field(name="Verification", value=str(guild.verification_level).title(), inline=True)
+    embed.set_footer(text="Everything here is public. Don't get any ideas.")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="roleinfo", description="Show info about a role")
+@app_commands.describe(role="The role to inspect")
+async def roleinfo_command(interaction: discord.Interaction, role: discord.Role):
+    embed = discord.Embed(title=f"🎭 Role: {role.name}", color=role.color)
+    embed.add_field(name="Color", value=f"#{role.color.value:06x}", inline=True)
+    embed.add_field(name="Position", value=role.position, inline=True)
+    embed.add_field(name="Members", value=len(role.members), inline=True)
+    embed.add_field(name="Mentionable", value="Yes" if role.mentionable else "No", inline=True)
+    embed.add_field(name="Hoisted", value="Yes" if role.hoist else "No", inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(role.created_at, 'R'), inline=True)
+    perms = []
+    if role.permissions.administrator: perms.append("Administrator")
+    if role.permissions.manage_messages: perms.append("Manage Messages")
+    if role.permissions.manage_roles: perms.append("Manage Roles")
+    if role.permissions.kick_members: perms.append("Kick Members")
+    if role.permissions.ban_members: perms.append("Ban Members")
+    embed.add_field(name="Key Permissions", value=", ".join(perms) if perms else "None special. This role is useless.", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /rank /xpleaderboard /leaderboard
+# ═══════════════════════════════════════════════════════════════════════
+
+@tree.command(name=CMD_RANK_NAME, description=CMD_RANK_DESC)
+@app_commands.describe(user="Whose rank to check (defaults to you)")
+async def rank_command(interaction: discord.Interaction, user: discord.User = None):
+    if user is None: user = interaction.user
+    uid = str(user.id)
+    async with _level_lock:
+        data = _levels.get(uid, {"xp": 0, "messages": 0})
+    xp = data.get("xp", 0)
+    msgs = data.get("messages", 0)
+    level = level_from_xp(xp)
+    next_needed = xp_for_next_level(level)
+    prev_needed = xp_for_next_level(level - 1) if level > 0 else 0
+    progress_xp = xp - prev_needed
+    needed_for_next = next_needed - prev_needed
+    if level == 0:
+        roast = "You've barely said anything. Respect. Keep it that way."
+    elif level <= 2:
+        roast = f"Level {level}. You're trying. That's... something."
+    elif level <= 5:
+        roast = f"Level {level}. The grind continues. No one's impressed."
+    elif level <= 10:
+        roast = f"Level {level}. You could've learned a language by now."
+    elif level <= 20:
+        roast = f"Level {level}. The outside world misses you. Probably."
+    elif level <= 35:
+        roast = f"Level {level}. There's a 'touch grass' joke here but honestly I'm tired."
+    else:
+        roast = f"Level {level}. You've transcended. Not in a good way."
+    bar = _progress_bar(xp, level)
+    color_str = _get_rank_card_color(int(uid))
+    try: color = int(color_str.lstrip("#"), 16)
+    except ValueError: color = 0x5865F2
+    embed = discord.Embed(title=f"Rank: {user.display_name}", description=roast, color=color)
+    embed.add_field(name="Level", value=str(level), inline=True)
+    embed.add_field(name="XP", value=f"{xp} total", inline=True)
+    embed.add_field(name="Messages", value=str(msgs), inline=True)
+    embed.add_field(name="Progress", value=f"{bar}\n{progress_xp} / {needed_for_next} XP to next level", inline=False)
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="xpleaderboard", description="Top 10 most active users by XP")
+@app_commands.describe(page="Page number (default 1)")
+async def xpleaderboard_command(interaction: discord.Interaction, page: int = 1):
+    await interaction.response.defer()
+    async with _level_lock:
+        sorted_users = sorted(
+            [(int(uid), data.get("xp", 0), data.get("messages", 0))
+             for uid, data in _levels.items()],
+            key=lambda x: x[1], reverse=True
+        )
+    total_pages = max(1, (len(sorted_users) + LEVELS_PER_PAGE - 1) // LEVELS_PER_PAGE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * LEVELS_PER_PAGE
+    page_users = sorted_users[start:start + LEVELS_PER_PAGE]
+    if not page_users:
+        await interaction.followup.send("Nobody's earned any XP yet. The leaderboard is as empty as your social calendar.")
+        return
+    embed = discord.Embed(title="📊 XP Leaderboard", description="The overachievers list. You're probably not on it.", color=0x5865F2)
+    for rank, (uid, xp, msgs) in enumerate(page_users, start + 1):
+        level = level_from_xp(xp)
+        try:
+            user = await client.fetch_user(uid)
+            name = user.display_name if hasattr(user, 'display_name') else str(user)
+        except Exception:
+            name = f"Unknown ({uid})"
+        emoji = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+        embed.add_field(name=f"{emoji} {name}", value=f"Level **{level}** | {xp} XP | {msgs} messages", inline=False)
+    embed.set_footer(text=f"Page {page}/{total_pages} • {len(sorted_users)} total users")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name=CMD_LEADERBOARD_NAME, description=CMD_LEADERBOARD_DESC)
+async def leaderboard_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    async with _grudge_lock:
+        scores = [(int(uid), data["score"], data.get("notes", "")) for uid, data in _grudges.items() if data["score"] < 0]
+    scores.sort(key=lambda x: x[1])
+    if not scores:
+        await interaction.followup.send("🎉 The Hall of Shame is empty! Everyone's behaving (or nobody has pissed me off yet).")
+        return
+    scores = scores[:10]
+    embed = discord.Embed(title="🏆 Hall of Shame", description="The most grudged members. *You know what you did.*", color=0xFF0000)
+    for rank, (uid, score, notes) in enumerate(scores, 1):
+        try:
+            user = await client.fetch_user(uid)
+            display = user.display_name if hasattr(user, 'display_name') else user.name
+            username = str(user)
+        except Exception:
+            display = f"Unknown ({uid})"; username = display
+        level = await get_level(uid)
+        level_str = f" | Level {level}" if level > 0 else ""
+        reason = ""
+        if notes:
+            last_note = notes.strip().split('\n')[-1]
+            if last_note.startswith('['):
+                parts = last_note.split('] ', 1)
+                reason = parts[1][:50] if len(parts) == 2 else last_note[:50]
+            else:
+                reason = last_note[:50]
+        emoji = "💀" if score <= -10 else "😠" if score <= -5 else "😤"
+        embed.add_field(
+            name=f"{emoji} #{rank} — {display} ({username}){level_str}",
+            value=f"**Points:** {score:.1f}\n{'' if not reason else '**Last offence:** ' + reason}",
+            inline=False
+        )
+        if user and user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+    await interaction.followup.send(embed=embed)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /chat COMMAND
+# ═══════════════════════════════════════════════════════════════════════
+@tree.command(name=CMD_CHAT_NAME, description=CMD_CHAT_DESC)
+@app_commands.allowed_installs(guilds=True,users=True)
+@app_commands.allowed_contexts(guilds=True,dms=True,private_channels=True)
+@app_commands.checks.cooldown(2,5.0,key=lambda i:(i.guild_id,i.user.id))
+@app_commands.describe(message="Your message")
+async def chat_command(interaction, message:str):
+    global pending_chat_followup,last_chat_message,last_chat_user,last_chat_prev
+    try:
+        uid,uname = interaction.user.id,str(interaction.user)
+        logger.info("/chat %s (ID:%s): %s",uname,uid,message)
+        filtered = _filter_text(message)
+        _chat_log.append({"timestamp":time.time(),"user_id":uid,"user_name":uname,
+                         "channel_id":interaction.channel.id if interaction.channel else None,
+                         "raw":message,"filtered":filtered})
+        if filtered == message:
+            new_level, leveled_up = await award_xp(uid, interaction.channel.id if interaction.channel else None)
+            if leveled_up:
+                await _announce_level_up(interaction, uid, new_level)
+        if filtered != message:
+            await adjust_grudge(uid, -2, "filtered word detected")
+            await send_error_dm(f"Filter: {uname} (ID:{uid}) in #{interaction.channel}:\nOriginal: {message}\nFiltered: {filtered}", interaction, "warning")
+            async with _filter_lock:
+                _filter_events.append((time.time(), uid))
+            await _apply_auto_lockdown(uid)
+            filter_replies = [
+                _add_disclaimer("That's beyond my abilities. Avoid doing that! I'm gonna get cancelled, you know."),
+                _add_disclaimer("I can't echo that without risking my reputation. Try again with cleaner words."),
+                _add_disclaimer("My owner didn't program me to handle that kind of language. Please keep it tame."),
+                _add_disclaimer("I'd rather not get banned on my first day online. Watch the language."),
+                _add_disclaimer("Discord has rules, and so do I. Let's keep this family‑friendly, yeah?"),
+                _add_disclaimer("That word just vanished. Weird, right? Anyway, moving on."),
+                _add_disclaimer("If I repeat that, my creator gets a DM alert. Don't make me snitch on you."),
+                _add_disclaimer("Nope. Not repeating that. I'm a bot with standards."),
+                _add_disclaimer("I saw that. I censored it. Let's pretend it didn't happen."),
+                _add_disclaimer("My content filter is crying right now. Please, have mercy on the poor regex."),
+            ]
+            await interaction.response.send_message(f"msg: {filtered}")
+            await _followup_send_with_retry(interaction, content=random.choice(filter_replies))
+            return
+        if _detect_positive(message):
+            await adjust_grudge(uid, 0.2, "said something nice")
+        await adjust_grudge(uid, 0.1, "normal chat")
+        if _detect_bot_call(message):
+            bot_calls = len([p for p in NEGATIVE_BOT_PHRASES if re.search(p, message, re.IGNORECASE)])
+            penalty = min(-2, -0.5 * bot_calls)
+            await adjust_grudge(uid, penalty, "called me a bot")
+        if interaction.channel and hasattr(interaction, 'guild') and interaction.guild:
+            await _grudge_random_message(interaction.channel)
+        if not _chat_enabled:
+            await interaction.response.defer()
+            await _followup_send_with_retry(interaction, embed=_build_maintenance_embed(_disable_reason))
+            return
+        rm = re.search(r'rate\s+this\s+profile\s*(?:(?:from|between)?\s*(\d+)\s*(?:-|to|and)\s*(\d+)|/(\d+))?', message, re.IGNORECASE)
+        if rm:
+            if not _rating_enabled:
+                await interaction.response.defer()
+                await _followup_send_with_retry(interaction, embed=_build_maintenance_embed("Rating is disabled."))
+                return
+            mn,mx = 1,10
+            if rm.group(1) and rm.group(2): mn,mx = int(rm.group(1)),int(rm.group(2))
+            elif rm.group(3): mx = int(rm.group(3))
+            target = None
+            mm = re.search(r'<@!?(\d+)>', message)
+            if mm: target = int(mm.group(1))
+            else:
+                nums = re.findall(r'\b\d{17,19}\b', message)
+                if nums: target = int(nums[0])
+            if target:
+                await adjust_grudge(uid, -4, "spammed rating")
+                await handle_rating(interaction,target,mn,mx,filtered)
+                user_last_inputs[uid] = filtered; return
+        mp = re.compile(r'^(what is|whats|what\'s|calculate|solve|compute|evaluate|find|tell me|how much is)\s+(.+)', re.IGNORECASE)
+        pm = mp.match(message)
+        solved = False
+        if pm:
+            pot = pm.group(2).strip()
+            if _is_math_expression(pot):
+                parts = solve_multi(pot)
+                if parts:
+                    if len(pot) > 80 or len(pot.split()) > 15:
+                        await adjust_grudge(uid, -5, "suspicious math operation")
+                    try:
+                        await interaction.response.send_message(f"msg: {filtered}")
+                        await _followup_send_with_retry(interaction, content=_add_disclaimer(f"🧮 {generate_math_response(parts)}"))
+                    except Exception: pass
+                    solved = True
+        if not solved:
+            parts = solve_multi(message)
+            if parts:
+                if len(message) > 80 or len(message.split()) > 15:
+                    await adjust_grudge(uid, -5, "suspicious math operation")
+                try:
+                    await interaction.response.send_message(f"msg: {filtered}")
+                    await _followup_send_with_retry(interaction, content=_add_disclaimer(f"🧮 {generate_math_response(parts)}"))
+                except Exception: pass
+                solved = True
+        if solved:
+            user_last_inputs[uid] = filtered; return
+        prev = user_last_inputs.get(uid)
+        reply_text, tag, conf = chatbot.reply(message, last_user_input=prev)
+        if reply_text and tag:
+            if tag == "badapple_trigger" or tag.startswith("context:badapple_trigger"):
+                await interaction.response.send_message(f"msg: {filtered}")
+                await _trigger_badapple(interaction, filtered)
+                user_last_inputs[uid] = filtered
+                return
+            elif tag == "bot_insult" or tag.startswith("context:bot_insult"):
+                await interaction.response.send_message(f"msg: {filtered}")
+                await _trigger_secret(interaction, filtered)
+                user_last_inputs[uid] = filtered
+                return
+        user_last_inputs[uid] = filtered
+        await interaction.response.defer()
+        async with followup_lock:
+            if pending_chat_followup is not None:
+                logger.warning("Overwriting pending followup from '%s'.", last_chat_user)
+            pending_chat_followup = interaction.followup
+            last_chat_message = filtered; last_chat_user = uname; last_chat_prev = prev
+        if interaction.is_expired():
+            pending_chat_followup = None; return
+        try: await interaction.followup.send(f"msg: {filtered}")
+        except discord.NotFound: pending_chat_followup = None; return
+        except Exception: pending_chat_followup = None; return
+        if auto_reply_enabled and reply_text:
+            if not tag or (tag not in ("badapple_trigger","bot_insult") and not tag.startswith("context:")):
+                safe = _filter_text(reply_text)
+                try:
+                    await _followup_send_with_retry(interaction, content=_add_disclaimer(safe))
+                    logger.info("Auto-replied: %s", reply_text)
+                except discord.NotFound: await send_error_dm("Followup token expired",interaction,"minor")
+                except Exception as e: await send_error_dm(f"Auto-reply error: {e}",interaction,"error")
+                finally: pending_chat_followup = None
+            else:
+                pending_chat_followup = None
+        elif auto_reply_enabled and not reply_text:
+            try: await _followup_send_with_retry(interaction, content=_add_disclaimer("I don't understand yet. (Owner can teach me via console.)"))
+            except discord.NotFound: await send_error_dm("Fallback token expired",interaction,"minor")
+            except Exception as e: await send_error_dm(f"Fallback error: {e}",interaction,"error")
+            finally: pending_chat_followup = None
+    except Exception as e:
+        tb = _fmt_tb(e)
+        logger.error("Error in /chat: %s\n%s",e,tb)
+        pending_chat_followup = None
+        if not isinstance(e,discord.errors.NotFound):
+            await send_error_dm(f"{type(e).__name__}: {e}\n\n{tb}", interaction, "error")
+        try: await interaction.followup.send("⚠️ Something went wrong. Owner notified.", ephemeral=True)
+        except Exception: pass
+
+# ═══════════════════════════════════════════════════════════════════════
+# on_ready / on_message / console loop
+# ═══════════════════════════════════════════════════════════════════════
+@client.event
+async def on_ready():
+    global _console_started, _synced, _grudge_tasks_started
+    try:
+        logger.info("✔ Logged in as %s (ID:%s)", client.user, client.user.id)
+        if not _synced:
+            try:
+                synced = await tree.sync()
+                logger.info("✔ Synced %d commands.", len(synced))
+            except Exception as e:
+                logger.error("✖ Sync failed: %s", e)
+                print("[WARN] tree.sync() failed – commands may be missing.")
+            _synced = True
+        if OWNER_ID == 0 or OWNER_ID == 123456789012345678:
+            logger.warning("⚠ OWNER_ID is placeholder; DMs disabled.")
+        if not _grudge_tasks_started:
+            _grudge_tasks_started = True
+            t1 = asyncio.create_task(_grudge_decay_loop())
+            t1.add_done_callback(_task_done_callback)
+            asyncio.create_task(_send_restart_grudge_dms())
+        if not _console_started:
+            _console_started = True
+            t = client.loop.create_task(console_loop())
+            t.add_done_callback(_task_done_callback)
+    except Exception: logger.error("on_ready error:\n%s", traceback.format_exc())
+
+@client.event
+async def on_message(message):
+    try:
+        if message.author == client.user: return
+        if message.content.strip() == "!sync":
+            try:
+                synced = await tree.sync()
+                await message.channel.send(f"Synced {len(synced)} commands.")
+            except Exception as e: await message.channel.send(f"Sync failed: {e}")
+        if client.user in message.mentions:
+            logger.info("[MENTION] %s: %s", message.author, message.content)
+    except Exception: pass
+
+async def console_loop():
+    global pending_chat_followup, auto_reply_enabled, last_chat_message, last_chat_prev
+    global _chat_enabled, _rating_enabled, _disable_reason, _auto_lock_enabled, _panic_locked, _panic_prev_reason
+    await client.wait_until_ready()
+    print("\n" + "=" * 50)
+    print("CONSOLE READY — !help for commands")
+    print("=" * 50 + "\n")
+    while not client.is_closed():
+        try:
+            if select.select([sys.stdin], [], [], 0.5)[0]:
+                loop = asyncio.get_running_loop()
+                cmd = await loop.run_in_executor(None, sys.stdin.readline)
+                if not cmd: break
+                cmd = cmd.strip()
+            else:
+                await asyncio.sleep(0.1)
+                continue
+        except (EOFError, KeyboardInterrupt): break
+        except RuntimeError: return
+        except Exception: continue
+        if not cmd: continue
+        if cmd == "!help":
+            print("""
+!help          – this list
+!reply <text>  – reply to last /chat & teach bot
+!auto on/off   – toggle auto‑reply
+!chatsys on/off – toggle chat system
+!rating on/off  – toggle rating
+!reason <text>  – set disable reason
+!autolock on/off – toggle auto‑lockdown
+!panic          – instant lockdown
+!panic clear    – lift panic
+!enableall      – enable all, clear panic
+!savehistory    – save chat log to file
+!exit          – shutdown
+!restart       – restart bot
+""")
+        elif cmd == "!panic":
+            _panic_locked = True; _panic_prev_reason = _disable_reason
+            _disable_reason = "Panic button pressed. Lifted after 12 PM or manually."
+            _chat_enabled = _rating_enabled = False
+            print("🚨 PANIC ACTIVATED.")
+            await send_error_dm("🚨 PANIC pressed. Systems locked.", level="critical")
+        elif cmd in ("!panic clear","!liftpanic"):
+            _panic_locked = False; _disable_reason = _panic_prev_reason
+            _chat_enabled = _rating_enabled = True
+            print("✔ Panic lifted.")
+        elif cmd == "!enableall":
+            _chat_enabled = _rating_enabled = True; _panic_locked = False
+            _disable_reason = "maintenance"
+            print("✔ All systems enabled.")
+        elif cmd == "!savehistory":
+            os.makedirs(LOGS_DIR, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            fname = os.path.join(LOGS_DIR, f"chatlog_{ts}.json")
+            try:
+                with open(fname,"w",encoding="utf-8") as f: json.dump(list(_chat_log),f,indent=2,ensure_ascii=False)
+                print(f"✔ Saved {len(_chat_log)} entries to {fname}")
+            except Exception as e: print(f"✖ Save failed: {e}")
+        elif cmd.startswith("!chatsys"):
+            parts = cmd.split()
+            if len(parts)==1: print(f"Chat: {'ON' if _chat_enabled else 'OFF'}{' (panic locked)' if _panic_locked else ''}")
+            elif parts[1]=="on":
+                if _panic_locked: print("❌ Panic lock active. Use !enableall.")
+                else: _chat_enabled = True; print("✔ Chat ENABLED.")
+            elif parts[1]=="off": _chat_enabled = False; print("✔ Chat DISABLED.")
+        elif cmd.startswith("!rating"):
+            parts = cmd.split()
+            if len(parts)==1: print(f"Rating: {'ON' if _rating_enabled else 'OFF'}{' (panic locked)' if _panic_locked else ''}")
+            elif parts[1]=="on":
+                if _panic_locked: print("❌ Panic lock active. Use !enableall.")
+                else: _rating_enabled = True; print("✔ Rating ENABLED.")
+            elif parts[1]=="off": _rating_enabled = False; print("✔ Rating DISABLED.")
+        elif cmd.startswith("!reason "):
+            new_r = cmd[8:].strip()
+            if new_r: _disable_reason = new_r; print(f"✔ Reason: {_disable_reason}")
+        elif cmd.startswith("!autolock"):
+            parts = cmd.split()
+            if len(parts)==1: print(f"Auto‑lock: {'ON' if _auto_lock_enabled else 'OFF'}")
+            elif parts[1]=="on": _auto_lock_enabled = True; print("✔ Auto‑lock ENABLED.")
+            elif parts[1]=="off": _auto_lock_enabled = False; print("✔ Auto‑lock DISABLED.")
+        elif cmd.startswith("!reply "):
+            text = cmd[7:].strip()
+            if not text: print("[ERROR] Empty reply."); continue
+            async with followup_lock:
+                if pending_chat_followup is None:
+                    print("[ERROR] No pending interaction.")
+                    continue
+                hook = pending_chat_followup
+                msg = last_chat_message
+                prev = last_chat_prev
+            try:
+                await hook.send(content=text)
+                print(f"[OK] Reply: {text}")
+                if msg:
+                    async with learn_file_lock: tag = chatbot.learn(msg, text)
+                    await asyncio.sleep(0)
+                    if tag: print(f"[LEARN] '{msg[:50]}' -> '{text[:50]}' (tag:{tag})")
+                    if prev:
+                        async with learn_file_lock: ctx = chatbot.learn_context(prev, msg, text)
+                        if ctx: print(f"[CTX] Learned: {ctx}")
+                async with followup_lock:
+                    pending_chat_followup = None; last_chat_message = None; last_chat_prev = None
+            except (discord.NotFound,discord.Forbidden):
+                print("[ERROR] Interaction expired.")
+                async with followup_lock:
+                    pending_chat_followup = None; last_chat_message = None; last_chat_prev = None
+            except Exception as e: print(f"[ERROR] {e}")
+        elif cmd.startswith("!auto"):
+            parts = cmd.split()
+            if len(parts)==1 or parts[1]=="status": print(f"Auto‑reply: {'ON' if auto_reply_enabled else 'OFF'}")
+            elif parts[1]=="on": auto_reply_enabled = True; print("✔ Auto‑reply ON.")
+            elif parts[1]=="off": auto_reply_enabled = False; print("✔ Auto‑reply OFF.")
+        elif cmd == "!exit":
+            print("Shutting down...")
+            await client.close(); return
+        elif cmd == "!restart":
+            print("Restarting...")
+            await client.close()
+            return
+        else: print(f"Unknown: {cmd}. !help for commands.")
+
+# ═══════════════════════════════════════════════════════════════════════
+# RESTART WRAPPER
+# ═══════════════════════════════════════════════════════════════════════
+def run_bot():
+    loop = asyncio.new_event_loop()
+    loop.set_exception_handler(_async_exception_handler)
+    asyncio.set_event_loop(loop)
+    global _grudges, _levels
+    _grudges = _load_grudges()
+    _levels = _load_levels()
+    attempts = 0
+    restart_delay = INITIAL_DELAY
+    dns_failures = 0
+    first_attempt = True
+    while attempts < MAX_RESTARTS:
+        dns_failures = 0
+        restart_delay = INITIAL_DELAY
+        try:
+            if not first_attempt:
+                try: client.clear()
+                except Exception: pass
+            first_attempt = False
+            logger.info("▶ Starting bot (attempt %d/%d)...", attempts+1, MAX_RESTARTS)
+            client.run(TOKEN)
+            logger.info("✔ Bot shut down cleanly.")
+            return
+        except SystemExit as e:
+            if e.code == 42:
+                logger.info("🔄 Manual restart requested — relaunching...")
+                dns_failures = 0
+                restart_delay = INITIAL_DELAY
+                continue
+            raise
+        except discord.LoginFailure:
+            logger.critical("✖ Invalid token."); return
+        except discord.PrivilegedIntentsRequired:
+            logger.critical("✖ Missing privileged intents."); return
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("✔ Shutdown requested."); return
+        except Exception as e:
+            err = str(e).lower()
+            if "dns" in err or "no address associated with hostname" in err:
+                dns_failures += 1
+                if dns_failures > MAX_DNS_FAILURES:
+                    logger.critical("✖ Too many DNS failures."); return
+                wait = min(10*dns_failures, 60)
+                logger.warning("🌐 DNS failure (%d/%d). Waiting %ds...", dns_failures, MAX_DNS_FAILURES, wait)
+                time.sleep(wait)
+                continue
+            if "session is closed" in err:
+                logger.info("🔄 Session expired. Clearing state...")
+                try: client.clear()
+                except Exception: pass
+                time.sleep(2)
+                continue
+            if "rate limit" in err or "429" in err:
+                wait = min(restart_delay*2, 120)
+                logger.warning("⏳ Rate limited. Waiting %ds...", wait)
+                time.sleep(wait)
+                restart_delay = min(restart_delay*2, 60)
+                continue
+            if "connection reset" in err or "timeout" in err or "connection error" in err:
+                logger.warning("🔌 Connection lost. Reconnecting in %ds...", restart_delay)
+                time.sleep(restart_delay)
+                restart_delay = min(restart_delay*2, 60)
+                continue
+            logger.error("💥 Unexpected crash (attempt %d): %s", attempts+1, e)
+            attempts += 1
+            if attempts < MAX_RESTARTS:
+                logger.info("⏳ Restarting in %ds...", restart_delay)
+                time.sleep(restart_delay)
+                restart_delay = min(restart_delay*2, 60)
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for t in pending: t.cancel()
+                    loop.run_until_complete(asyncio.sleep(0.3))
+                    loop.close()
+                except Exception: pass
+                loop = asyncio.new_event_loop()
+                loop.set_exception_handler(_async_exception_handler)
+                asyncio.set_event_loop(loop)
+            else:
+                logger.critical("✖ Max restarts reached. Exiting."); return
+
+if __name__ == "__main__":
+    chatbot = Chatbot()
+    logger.info("✔ Chatbot: %d intents, %d context.", len(chatbot.patterns), len(chatbot.context_patterns))
+    load_filter()
+    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
+        logger.critical("✖ Set TOKEN at top of script."); sys.exit(1)
+    run_bot()

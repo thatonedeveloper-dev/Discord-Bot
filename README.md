@@ -3,8 +3,10 @@ Basically I tired to compress an entirely work in progress script because I was 
 
 also the code is viewable via the code viewer in the website or application.
 
-# IMPORTANT DETAIL FOR SETUP
+# IMPORTANT DETAILS FOR SETUP
 
+- The uncompressed version in the projects branch is not production ready IT IS A WORK IN PROGRESS it doesn't have data lost protection.
+  
 - This code is skeleton-only. The data.json, context.json, and filter.json files must be populated with your own intents, patterns, responses, and filter words for the chatbot and moderation to function. The default files contain starter data for demonstration and will NOT produce meaningful conversation without training or customization.
 
 - The TF-IDF model requires a dataset of patterns to match against. Without a populated data.json, the /chat command will respond "I don't understand yet" to everything. Build your own intents or train it via the console !reply command.
@@ -38,3 +40,5 @@ Q: Is this an actual discord bot? A: Yes of course you can get instructions on h
 
 important notice:
 I didn't test any of the special triggers PLEASE TELL ME SERIOUSLY PLEASE
+
+I'm not responsible for data lost if you use this code in deployment, you've been warned that json databases are unstable.

@@ -3,6 +3,11 @@ Basically I tired to compress an entirely work in progress script because I was 
 
 also the code is viewable via the code viewer in the website or application.
 
+# IMPORTANT DETAIL FOR SETUP
+
+- This code is skeleton-only. The data.json, context.json, and filter.json files must be populated with your own intents, patterns, responses, and filter words for the chatbot and moderation to function. The default files contain starter data for demonstration and will NOT produce meaningful conversation without training or customization.
+
+- The TF-IDF model requires a dataset of patterns to match against. Without a populated data.json, the /chat command will respond "I don't understand yet" to everything. Build your own intents or train it via the console !reply command.
 
 # project information 
 All project details are inside the documents branch. (The newest Doc-5.8 contains database information and more details about the chatbot, the rest can be explained by AI. On top on where it says 'main' press or click on it.)

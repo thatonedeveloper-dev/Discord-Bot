@@ -1,6 +1,9 @@
 # Discord-Bot
 Basically I tired to compress an entirely work in progress script because I was bored. (Have fun.)
 
+also the code is viewable via the code viewer in the website or application.
+
+
 # project information 
 All project details are inside the documents folder.
 

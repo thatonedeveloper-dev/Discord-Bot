@@ -1,5 +1,5 @@
 # Discord-Bot
-Basically I tired to compress an entirely work in progress script because I was bored. (Have fun.)
+Some details! The bot runs without any other files other than the libraries, and auto creates everything for setup, it is quite basic and simple! use uncompressed version(s) for personal and modified versions as 5.4 & 5.8 (compressed) is difficult to understand for beginners, uncompressed-5.4-2-dev was made to work in Android environments so errors are expected for windows and Linux environments, report or contact me if errors are found, and also basically I tired to compress a work in progress script because I was bored. (Have fun.)
 
 also the code is viewable via the code viewer in the website or application.
 

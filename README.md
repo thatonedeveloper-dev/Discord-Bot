@@ -44,3 +44,5 @@ important notice:
 I didn't test any of the special triggers PLEASE TELL ME SERIOUSLY PLEASE
 
 I'm not responsible for data lost if you use this code in deployment, you've been warned that json databases are unstable.
+
+When your gonna use code please include the license.
